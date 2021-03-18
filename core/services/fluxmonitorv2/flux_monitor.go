@@ -493,8 +493,11 @@ func (fm *FluxMonitor) processLogs() {
 			err = broadcast.MarkConsumed()
 
 		case *flags_wrapper.FlagsFlagLowered:
-			fm.pollManager.Awaken(fm.initialRoundState())
-			fm.pollIfEligible(PollRequestTypeAwaken, NewZeroDeviationChecker())
+			// Only reactivate if it is hibernating
+			if fm.pollManager.cfg.IsHibernating {
+				fm.pollManager.Awaken(fm.initialRoundState())
+				fm.pollIfEligible(PollRequestTypeAwaken, NewZeroDeviationChecker())
+			}
 
 			err = broadcast.MarkConsumed()
 
