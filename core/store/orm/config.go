@@ -92,6 +92,8 @@ type (
 		GasUpdaterBlockDelay             uint16
 		GasUpdaterBlockHistorySize       uint16
 		GasUpdaterEnabled                bool
+		BlockFetcherBatchSize            *uint32
+		BlockFetcherHistorySize          uint16
 		HeadTimeBudget                   time.Duration
 		MinIncomingConfirmations         uint32
 		MinRequiredOutgoingConfirmations uint64
@@ -120,6 +122,8 @@ func init() {
 		GasUpdaterBlockHistorySize:       24,
 		GasUpdaterBatchSize:              &defaultGasUpdaterBatchSize,
 		GasUpdaterEnabled:                true,
+		BlockFetcherBatchSize:            &defaultGasUpdaterBatchSize,
+		BlockFetcherHistorySize:          50,
 		HeadTimeBudget:                   13 * time.Second,
 		MinIncomingConfirmations:         3,
 		MinRequiredOutgoingConfirmations: 12,
@@ -163,6 +167,8 @@ func init() {
 		GasUpdaterBlockHistorySize:       24,
 		GasUpdaterBatchSize:              &defaultGasUpdaterBatchSize,
 		GasUpdaterEnabled:                true,
+		BlockFetcherBatchSize:            &defaultGasUpdaterBatchSize,
+		BlockFetcherHistorySize:          50,
 		HeadTimeBudget:                   3 * time.Second,
 		MinIncomingConfirmations:         3,
 		MinRequiredOutgoingConfirmations: 12,
@@ -186,6 +192,8 @@ func init() {
 		GasUpdaterBlockHistorySize:       128,
 		GasUpdaterBatchSize:              &defaultGasUpdaterBatchSize,
 		GasUpdaterEnabled:                true,
+		BlockFetcherBatchSize:            &defaultGasUpdaterBatchSize,
+		BlockFetcherHistorySize:          200,
 		HeadTimeBudget:                   1 * time.Second,
 		MinIncomingConfirmations:         39, // mainnet * 13 (1s vs 13s block time)
 		MinRequiredOutgoingConfirmations: 39, // mainnet * 13
@@ -202,6 +210,8 @@ func init() {
 		EthTxResendAfterThreshold:        5 * time.Second,
 		GasUpdaterBlockHistorySize:       0, // Force an error if someone set GAS_UPDATER_ENABLED=true by accident; we never want to run the gas updater on optimism
 		GasUpdaterEnabled:                false,
+		BlockFetcherBatchSize:            &defaultGasUpdaterBatchSize,
+		BlockFetcherHistorySize:          50,                     //TODO:  handle GasUpdaterBlockHistorySize being 0
 		HeadTimeBudget:                   100 * time.Millisecond, // Actually heads on Optimism happen every time a transaction is sent so it could be much more frequent than this. Will need to observe in practice how rapid they are and maybe implement special casing
 		MinIncomingConfirmations:         1,
 		MinRequiredOutgoingConfirmations: 0,
@@ -921,6 +931,18 @@ func (c Config) GasUpdaterBatchSize() uint32 {
 	return c.EthRPCDefaultBatchSize()
 }
 
+//TODO: description
+func (c Config) BlockFetcherBatchSize() uint32 {
+	if c.viper.IsSet(EnvVarName("BlockFetcherBatchSize")) {
+		return c.viper.GetUint32(EnvVarName("BlockFetcherBatchSize"))
+	}
+	defaultBlockFetcherBatchSize := chainSpecificConfig(c).BlockFetcherBatchSize
+	if defaultBlockFetcherBatchSize != nil {
+		return *defaultBlockFetcherBatchSize
+	}
+	return c.EthRPCDefaultBatchSize()
+}
+
 // GasUpdaterBlockDelay is the number of blocks that the gas updater trails behind head.
 // E.g. if this is set to 3, and we receive block 10, gas updater will
 // fetch block 7.
@@ -942,6 +964,14 @@ func (c Config) GasUpdaterBlockHistorySize() uint16 {
 		return uint16(c.viper.GetUint32(EnvVarName("GasUpdaterBlockHistorySize")))
 	}
 	return chainSpecificConfig(c).GasUpdaterBlockHistorySize
+}
+
+//TODO: description
+func (c Config) BlockFetcherHistorySize() uint16 {
+	if c.viper.IsSet(EnvVarName("BlockFetcherHistorySize")) {
+		return uint16(c.viper.GetUint32(EnvVarName("BlockFetcherHistorySize")))
+	}
+	return chainSpecificConfig(c).BlockFetcherHistorySize
 }
 
 // GasUpdaterTransactionPercentile is the percentile gas price to choose. E.g.

@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/smartcontractkit/chainlink/core/services/fluxmonitorv2"
 	"github.com/smartcontractkit/chainlink/core/services/gasupdater"
+	"github.com/smartcontractkit/chainlink/core/services/headtracker"
 	"github.com/smartcontractkit/chainlink/core/services/keeper"
 	"github.com/smartcontractkit/chainlink/core/services/periodicbackup"
 	"github.com/smartcontractkit/chainlink/core/services/telemetry"
@@ -161,9 +162,11 @@ func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker pos
 		monitoringEndpoint = telemetry.NewAgent(explorerClient)
 	}
 
+	blockFetcher := headtracker.NewBlockFetcher(store.EthClient, store.Config)
+
 	if store.Config.GasUpdaterEnabled() {
 		logger.Debugw("GasUpdater: dynamic gas updates are enabled", "ethGasPriceDefault", store.Config.EthGasPriceDefault())
-		gasUpdater := gasupdater.NewGasUpdater(store.EthClient, store.Config)
+		gasUpdater := gasupdater.NewGasUpdater(blockFetcher, store.Config)
 		subservices = append(subservices, gasUpdater)
 		headTrackables = append(headTrackables, gasUpdater)
 	} else {
@@ -337,7 +340,7 @@ func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker pos
 		}}
 		headTrackables = append(headTrackables, headTrackable)
 	}
-	app.HeadTracker = services.NewHeadTracker(headTrackerLogger, store, headTrackables)
+	app.HeadTracker = services.NewHeadTracker(headTrackerLogger, store, blockFetcher, headTrackables)
 
 	// Log Broadcaster uses the last stored head as a limit of log backfill
 	// which needs to be set before it's started

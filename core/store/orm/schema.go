@@ -74,6 +74,8 @@ type ConfigSchema struct {
 	FeatureFluxMonitorV2                      bool            `env:"FEATURE_FLUX_MONITOR_V2" default:"false"`
 	FeatureOffchainReporting                  bool            `env:"FEATURE_OFFCHAIN_REPORTING" default:"false"`
 	FlagsContractAddress                      string          `env:"FLAGS_CONTRACT_ADDRESS"`
+	BlockFetcherBatchSize                     uint32          `env:"BLOCK_FETCHER_BATCH_SIZE" default:"10"`
+	BlockFetcherHistorySize                   uint16          `env:"BLOCK_FETCHER_HISTORY_SIZE" default:"100"`
 	GasUpdaterBatchSize                       uint32          `env:"GAS_UPDATER_BATCH_SIZE"`
 	GasUpdaterBlockDelay                      uint16          `env:"GAS_UPDATER_BLOCK_DELAY"`
 	GasUpdaterBlockHistorySize                uint16          `env:"GAS_UPDATER_BLOCK_HISTORY_SIZE"`
