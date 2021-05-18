@@ -162,7 +162,7 @@ func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker pos
 		monitoringEndpoint = telemetry.NewAgent(explorerClient)
 	}
 
-	blockFetcher := headtracker.NewBlockFetcher(store.EthClient, store.Config)
+	blockFetcher := headtracker.NewBlockFetcher(store.EthClient, store.Config, logger.Default)
 
 	if store.Config.GasUpdaterEnabled() {
 		logger.Debugw("GasUpdater: dynamic gas updates are enabled", "ethGasPriceDefault", store.Config.EthGasPriceDefault())

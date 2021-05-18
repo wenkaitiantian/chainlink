@@ -79,11 +79,11 @@ type SimulatedBackendClient struct {
 }
 
 func (c *SimulatedBackendClient) FastBlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
-	panic("implement me")
+	return c.b.BlockByHash(ctx, hash)
 }
 
 func (c *SimulatedBackendClient) BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
-	panic("implement me")
+	return c.b.BlockByHash(ctx, hash)
 }
 
 var _ eth.Client = (*SimulatedBackendClient)(nil)

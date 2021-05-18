@@ -260,7 +260,7 @@ func (client *client) BlockByNumber(ctx context.Context, number *big.Int) (*type
 	return client.primary.BlockByNumber(ctx, number)
 }
 
-// FastBlockByHash - Similar to the BlockByHash implementation but without downloading uncle blocks
+// FastBlockByHash - Similar to the BlockByHash implementation but does not download uncle blocks
 func (client *client) FastBlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
 	logger.Debugw("eth.Client#FastBlockByHash(...)",
 		"hash", hash,

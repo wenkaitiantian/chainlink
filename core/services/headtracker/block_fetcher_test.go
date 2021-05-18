@@ -2,9 +2,13 @@ package headtracker_test
 
 import (
 	"context"
+	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/smartcontractkit/chainlink/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/core/internal/utils"
 	"github.com/smartcontractkit/chainlink/core/services/eth/mocks"
 	"github.com/smartcontractkit/chainlink/core/services/headtracker"
@@ -29,9 +33,13 @@ func TestBlockFetcher_Start(t *testing.T) {
 	}
 
 	t.Run("fetches a range of blocks", func(t *testing.T) {
+		store, cleanup := cltest.NewStore(t)
+		defer cleanup()
+		logger := store.Config.CreateProductionLogger()
+
 		ethClient := new(mocks.Client)
 
-		blockFetcher := headtracker.NewBlockFetcher(ethClient, config)
+		blockFetcher := headtracker.NewBlockFetcher(ethClient, config, logger)
 
 		h := &models.Head{Hash: utils.NewHash(), Number: 42}
 		ethClient.On("BatchCallContext", mock.Anything, mock.MatchedBy(func(b []rpc.BatchElem) bool {
@@ -58,4 +66,68 @@ func TestBlockFetcher_Start(t *testing.T) {
 
 		ethClient.AssertExpectations(t)
 	})
+}
+
+func TestBlockFetcher_ConstructsChain(t *testing.T) {
+
+	config := &headtracker.BlockFetcherFakeConfig{
+		EthFinalityDepthField:           42,
+		BlockBackfillDepthField:         50,
+		BlockFetcherBatchSizeField:      4,
+		BlockFetcherHistorySizeField:    100,
+		EthHeadTrackerHistoryDepthField: 100,
+		GasUpdaterBatchSizeField:        0,
+		GasUpdaterBlockDelayField:       0,
+		GasUpdaterBlockHistorySizeField: 2,
+	}
+
+	store, cleanup := cltest.NewStore(t)
+	defer cleanup()
+	logger := store.Config.CreateProductionLogger()
+
+	ethClient := new(mocks.Client)
+
+	blockFetcher := headtracker.NewBlockFetcher(ethClient, config, logger)
+
+	h := &models.Head{Hash: utils.NewHash(), Number: 42}
+	block := newBlock(utils.NewHash(), 42)
+
+	ethClient.On("FastBlockByHash", mock.Anything, mock.Anything).Return(block, nil)
+	ethClient.On("BlockByNumber", mock.Anything, mock.Anything).Return(block, nil)
+	ethClient.On("BatchCallContext", mock.Anything, mock.MatchedBy(func(b []rpc.BatchElem) bool {
+		return len(b) == 2 &&
+			b[0].Method == "eth_getBlockByNumber" && b[0].Args[0] == "0x29" && b[0].Args[1] == true &&
+			b[1].Method == "eth_getBlockByNumber" && b[1].Args[0] == "0x2a" && b[1].Args[1] == true
+	})).Return(nil).Run(func(args mock.Arguments) {
+		elems := args.Get(1).([]rpc.BatchElem)
+		elems[0].Result = &headtracker.Block{
+			Number: 42,
+			Hash:   utils.NewHash(),
+		}
+		elems[1].Result = &headtracker.Block{
+			Number: 41,
+			Hash:   utils.NewHash(),
+		}
+	})
+
+	head, err := blockFetcher.Chain(context.Background(), *h)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, int(head.ChainLength()))
+	//assert.Len(t, blockFetcher.BlockCache(), 2)
+
+	//ethClient.AssertExpectations(t)
+}
+
+func setupChain() {
+
+}
+
+func newBlock(hash common.Hash, number int) *types.Block {
+	header := &types.Header{
+		Root:   hash,
+		Number: big.NewInt(int64(number)),
+	}
+	block := types.NewBlock(header, make([]*types.Transaction, 0), make([]*types.Header, 0), make([]*types.Receipt, 0), nil)
+	return block
 }

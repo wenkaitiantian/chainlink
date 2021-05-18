@@ -113,7 +113,7 @@ func (ht *HeadTracker) Start() error {
 
 		ht.wgDone.Add(4)
 		go ht.headListener.ListenForNewHeads(ht.handleNewHead, ht.handleConnected)
-		go ht.blockFetcher.Backfill(ht.chStop)
+		ht.blockFetcher.Backfill(ht.chStop)
 		go ht.backfiller()
 		go ht.headSampler()
 
@@ -187,9 +187,14 @@ func (ht *HeadTracker) headSampler() {
 				panic(fmt.Sprintf("expected `models.Head`, got %T", item))
 			}
 
-			//	headWithChain := ht.blockFetcher.Chain(ctx, head)
-
-			ht.onNewLongestChain(ctx, head)
+			headWithChain, err := ht.blockFetcher.Chain(ctx, head)
+			if err != nil {
+				ht.logger().Warnw("HeadTracker: unexpected error while constructing the chain on debounce. Callbacks won't be called", "err", err)
+				continue
+			} else if ctx.Err() != nil {
+				break
+			}
+			ht.onNewLongestChain(ctx, headWithChain)
 		}
 	}
 }
@@ -212,10 +217,10 @@ func (ht *HeadTracker) backfiller() {
 				}
 				{
 					ctx, cancel := utils.ContextFromChan(ht.chStop)
-					err := ht.Backfill(ctx, h, ht.store.Config.EthFinalityDepth())
+					err := ht.blockFetcher.SyncLatestHead(ctx, h)
 					defer cancel()
 					if err != nil {
-						ht.logger().Warnw("HeadTracker: unexpected error while backfilling heads", "err", err)
+						ht.logger().Warnw("HeadTracker: unexpected error while syncing the latest head", "err", err)
 					} else if ctx.Err() != nil {
 						break
 					}
@@ -329,15 +334,15 @@ func (ht *HeadTracker) handleNewHead(ctx context.Context, head models.Head) erro
 	if prevHead == nil || head.Number > prevHead.Number {
 		promCurrentHead.Set(float64(head.Number))
 
-		headWithChain, err := ht.store.Chain(ctx, head.Hash, ht.store.Config.EthFinalityDepth())
-		if ctx.Err() != nil {
-			return nil
-		} else if err != nil {
-			return errors.Wrap(err, "HeadTracker#handleNewHighestHead failed fetching chain")
-		}
+		//headWithChain, err := ht.store.Chain(ctx, head.Hash, ht.store.Config.EthFinalityDepth())
+		//if ctx.Err() != nil {
+		//	return nil
+		//} else if err != nil {
+		//	return errors.Wrap(err, "HeadTracker#handleNewHighestHead failed fetching chain")
+		//}
 
-		ht.backfillMB.Deliver(headWithChain)
-		ht.samplingMB.Deliver(headWithChain)
+		ht.backfillMB.Deliver(head)
+		ht.samplingMB.Deliver(head)
 		return nil
 	}
 	if head.Number == prevHead.Number {

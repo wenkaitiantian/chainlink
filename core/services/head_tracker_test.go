@@ -233,6 +233,7 @@ func TestHeadTracker_ReconnectOnError(t *testing.T) {
 
 	ethClient := new(mocks.Client)
 	sub := new(mocks.Subscription)
+	ethClient.On("HeaderByNumber", mock.Anything, mock.Anything).Return(cltest.Head(1), nil)
 	ethClient.On("ChainID", mock.Anything).Maybe().Return(store.Config.ChainID(), nil)
 	ethClient.On("SubscribeNewHead", mock.Anything, mock.Anything).Return(sub, nil)
 	ethClient.On("SubscribeNewHead", mock.Anything, mock.Anything).Return(nil, errors.New("cannot reconnect"))
@@ -356,6 +357,7 @@ func TestHeadTracker_SwitchesToLongestChain(t *testing.T) {
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{checker}, cltest.NeverSleeper{})
 
 	chchHeaders := make(chan chan<- *models.Head, 1)
+	ethClient.On("HeaderByNumber", mock.Anything, mock.Anything).Return(cltest.Head(1), nil)
 	ethClient.On("ChainID", mock.Anything).Return(store.Config.ChainID(), nil)
 	ethClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { chchHeaders <- args.Get(1).(chan<- *models.Head) }).

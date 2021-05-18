@@ -93,34 +93,19 @@ func (bd *BlockDownloader) GetBlockRange(ctx context.Context, head models.Head, 
 	}
 	bd.mut.Lock()
 
-	bd.logger.Warnw("BlockDownloader#bd.recent",
-		"bd.recent.len", len(bd.recent))
-
-	for key, b := range bd.recent {
+	for _, b := range bd.recent {
 		block := b
-		bd.logger.Warnw("BlockDownloader#bd.recent",
-			"key", key, "block.Number", block.Number, "fromBlock", fromBlock, "toBlock", toBlock)
-
 		if block.Number >= fromBlock && block.Number <= toBlock {
-			//bd.logger.Warnw("==========",
-			//	"key", key, "block.Number", block.Number, "fromBlock", fromBlock, "toBlock", toBlock)
-
 			blocks[block.Number] = block
 		}
 	}
 	bd.mut.Unlock()
-	//}
-
-	bd.logger.Warnw("BlockDownloader#bd.recent",
-		"blocks.len", len(blocks), "blocks", blocks)
 
 	blockRange := make([]*Block, 0)
 	for _, b := range blocks {
 		block := b
 		blockRange = append(blockRange, block)
 	}
-
-	bd.logger.Warnf("blockRange: %v", blockRange)
 
 	return blockRange, nil
 	// check if currently downloaded
@@ -289,7 +274,15 @@ func fromEthBlock(ethBlock types.Block) Block {
 	return block
 }
 
-func (bd *BlockDownloader) syncLatestHead(ctx context.Context, head models.Head) error {
+func headFromBlock(ethBlock Block) models.Head {
+	var head models.Head
+	head.Number = ethBlock.Number
+	head.Hash = ethBlock.Hash
+	head.ParentHash = ethBlock.ParentHash
+	return head
+}
+
+func (bd *BlockDownloader) syncLatestHead(ctx context.Context, head models.Head) (*models.Head, error) {
 	from := head.Number - int64(bd.historySize-1)
 	if from < 0 {
 		from = 0
@@ -298,7 +291,7 @@ func (bd *BlockDownloader) syncLatestHead(ctx context.Context, head models.Head)
 	mark := time.Now()
 	fetched := 0
 
-	bd.logger.Debugw("HeadTracker: starting sync head",
+	bd.logger.Debugw("BlockFetcher: starting sync head",
 		"blockNumber", head.Number,
 		"fromBlockHeight", from,
 		"toBlockHeight", head.Number)
@@ -306,22 +299,25 @@ func (bd *BlockDownloader) syncLatestHead(ctx context.Context, head models.Head)
 		if ctx.Err() != nil {
 			return
 		}
-		bd.logger.Debugw("HeadTracker: finished backfill",
+		bd.logger.Debugw("BlockFetcher: finished sync head",
 			"fetched", fetched,
 			"blockNumber", head.Number,
 			"time", time.Since(mark),
-			"id", "head_tracker",
 			"fromBlockHeight", from,
 			"toBlockHeight", head.Number)
 	}()
 
 	ethBlockPtr, err := bd.ethClient.FastBlockByHash(ctx, head.Hash)
 	if err != nil {
-		return errors.Wrap(err, "FastBlockByHash failed")
+		return nil, errors.Wrap(err, "FastBlockByHash failed")
 	}
 
 	var ethBlock = *ethBlockPtr
 	var block = fromEthBlock(ethBlock)
+	var chainTip = head
+	var chain = &chainTip
+
+	bd.logger.Warnf("block: %v", block.Number)
 
 	for i := block.Number - 1; i >= from; i-- {
 		// NOTE: Sequential requests here mean it's a potential performance bottleneck, be aware!
@@ -329,24 +325,29 @@ func (bd *BlockDownloader) syncLatestHead(ctx context.Context, head models.Head)
 		existingBlock = bd.findBlockByHash(head.Hash)
 		if existingBlock != nil {
 			block = *existingBlock
-			continue
+
+		} else {
+			bd.logger.Warnf("BlockByNumber: %v", i)
+			ethBlockPtr, err = bd.ethClient.BlockByNumber(ctx, big.NewInt(i))
+			fetched++
+			if ctx.Err() != nil {
+				break //TODO:
+			} else if err != nil {
+				return nil, errors.Wrap(err, "BlockByNumber failed")
+			}
+
+			block = fromEthBlock(*ethBlockPtr)
+
+			bd.mut.Lock()
+			bd.recent[block.Hash] = &block
+			bd.mut.Unlock()
 		}
 
-		ethBlockPtr, err = bd.ethClient.BlockByNumber(ctx, big.NewInt(i))
-		fetched++
-		if ctx.Err() != nil {
-			break //TODO:
-		} else if err != nil {
-			return errors.Wrap(err, "BlockByNumber failed")
-		}
-
-		block = fromEthBlock(*ethBlockPtr)
-
-		bd.mut.Lock()
-		bd.recent[block.Hash] = &block
-		bd.mut.Unlock()
+		head := headFromBlock(block)
+		chain.Parent = &head
+		chain = &head
 	}
-	return nil
+	return &chainTip, nil
 }
 
 //func aaa() {

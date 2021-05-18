@@ -58,7 +58,7 @@ func (bf *BlockFetcher) BlockCache() []*Block {
 	return bf.downloader.RecentSorted()
 }
 
-func NewBlockFetcher(ethClient eth.Client, config BlockFetcherConfig) *BlockFetcher {
+func NewBlockFetcher(ethClient eth.Client, config BlockFetcherConfig, logger *logger.Logger) *BlockFetcher {
 
 	if config.GasUpdaterBlockHistorySize()+config.GasUpdaterBlockDelay() > config.BlockFetcherHistorySize() {
 		panic("") //TODO:
@@ -75,7 +75,7 @@ func NewBlockFetcher(ethClient eth.Client, config BlockFetcherConfig) *BlockFetc
 	return &BlockFetcher{
 		ethClient:           ethClient,
 		downloader:          NewBlockDownloader(ethClient, config.BlockFetcherBatchSize(), config.BlockFetcherHistorySize()),
-		logger:              logger.Default,
+		logger:              logger,
 		config:              config,
 		addresses:           make(map[common.Address]struct{}),
 		rollingBlockHistory: make(map[int64]Block, 0),
@@ -98,35 +98,6 @@ func (bf *BlockFetcher) Backfill(chStop chan struct{}) {
 	}
 
 	bf.downloader.StartDownloadAsync(ctx, from, latestHead.Number)
-
-	//defer wgDone.Done()
-	//for {
-	//	select {
-	//	case <-chStop:
-	//		return
-	//	case <-ht.backfillMB.Notify():
-	//		for {
-	//			head, exists := ht.backfillMB.Retrieve()
-	//			if !exists {
-	//				break
-	//			}
-	//			h, is := head.(models.Head)
-	//			if !is {
-	//				panic(fmt.Sprintf("expected `models.Head`, got %T", head))
-	//			}
-	//			{
-	//				ctx, cancel := utils.ContextFromChan(ht.chStop)
-	//				err := ht.Backfill(ctx, h, ht.store.Config.EthFinalityDepth())
-	//				defer cancel()
-	//				if err != nil {
-	//					ht.logger().Warnw("HeadTracker: unexpected error while backfilling heads", "err", err)
-	//				} else if ctx.Err() != nil {
-	//					break
-	//				}
-	//			}
-	//		}
-	//	}
-	//}
 }
 
 // FetchLatestHead - Fetches the latest head from the blockchain, regardless of local cache
@@ -151,7 +122,7 @@ func (bf *BlockFetcher) BlockRange(ctx context.Context, head models.Head, fromBl
 	return blocksSlice, nil
 }
 
-func (bf *BlockFetcher) Chain(ctx context.Context, latestHead models.Head) (*models.Head, error) {
+func (bf *BlockFetcher) Chain(ctx context.Context, latestHead models.Head) (models.Head, error) {
 	bf.logger.Debugw("BlockFetcher#Chain for head", "number", latestHead.Number, "hash", latestHead.Hash)
 
 	from := latestHead.Number - int64(bf.config.EthFinalityDepth()-1)
@@ -159,61 +130,16 @@ func (bf *BlockFetcher) Chain(ctx context.Context, latestHead models.Head) (*mod
 		from = 0
 	}
 
-	//for i := head.Number - 1; i >= baseHeight; i-- {
-	//	// NOTE: Sequential requests here mean it's a potential performance bottleneck, be aware!
-	//	var existingHead *models.Head
-	//	existingHead, err = ht.store.HeadByHash(ctx, head.ParentHash)
-	//	if ctx.Err() != nil {
-	//		break
-	//	} else if err != nil {
-	//		return errors.Wrap(err, "HeadByHash failed")
-	//	}
-	//	if existingHead != nil {
-	//		head = *existingHead
-	//		continue
-	//	}
-	//	head, err = ht.fetchAndSaveHead(ctx, i)
-	//	fetched++
-	//	if ctx.Err() != nil {
-	//		break
-	//	} else if err != nil {
-	//		return errors.Wrap(err, "fetchAndSaveHead failed")
-	//	}
-	//}
-	//
-
-	blocks, err := bf.downloader.GetBlockRange(ctx, latestHead, from, latestHead.Number)
-
-	headWithChain := bf.constructChain(latestHead, blocks)
-
+	// typically all the heads should be constructed into a chain without issues, unless there was a very recent reorgs
+	// and new blocks were not downloaded yet
+	headWithChain, err := bf.downloader.syncLatestHead(ctx, latestHead)
 	if err != nil {
-		return nil, errors.Wrapf(err, "BlockFetcher#Chain error for GetBlockRange: %v", latestHead.Number)
+		return models.Head{}, errors.Wrapf(err, "BlockFetcher#Chain error for syncLatestHead: %v", latestHead.Number)
 	}
-
-	return headWithChain, nil
+	return *headWithChain, nil
 }
 
-// typically all the heads should be constructed into a chain without issues, unless there was a very recent reorgs
-// and new blocks were not downloaded yet
-
-// typically all the heads should be constructed into a chain without issues, unless there was a very recent reorgs
-// and new blocks were not downloaded yet
-func (bf *BlockFetcher) constructChain(head models.Head, blocks []*Block) *models.Head {
-	blocksByHash := make(map[common.Hash]*Block)
-	for _, b := range blocks {
-		block := b
-		blocksByHash[block.Hash] = block
-	}
-
-	//current := head
-	return nil
-	//for {
-	//	parentHead, ok := blocksByHash[current.ParentHash]
-	//	if ok {
-	//		current.Parent = parentHead.Number
-	//	}
-	//}
-
-	//head.Parent = head.
-
+func (bf *BlockFetcher) SyncLatestHead(ctx context.Context, head models.Head) error {
+	_, err := bf.downloader.syncLatestHead(ctx, head)
+	return err
 }
