@@ -13,7 +13,6 @@ import (
 	"github.com/smartcontractkit/chainlink/core/services/postgres"
 	"github.com/smartcontractkit/chainlink/core/store"
 	"github.com/smartcontractkit/chainlink/core/store/models"
-	"github.com/smartcontractkit/chainlink/core/store/orm"
 	"go.uber.org/multierr"
 )
 
@@ -52,7 +51,6 @@ type (
 	// worst case, which is in line with our other guarantees.
 	NonceSyncer struct {
 		store     *store.Store
-		config    orm.ConfigReader
 		ethClient eth.Client
 	}
 	// NSinserttx represents an EthTx and Attempt to be inserted together
@@ -63,10 +61,9 @@ type (
 )
 
 // NewNonceSyncer returns a new syncer
-func NewNonceSyncer(store *store.Store, config orm.ConfigReader, ethClient eth.Client) *NonceSyncer {
+func NewNonceSyncer(store *store.Store, ethClient eth.Client) *NonceSyncer {
 	return &NonceSyncer{
 		store,
-		config,
 		ethClient,
 	}
 }

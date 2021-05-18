@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"math/big"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -11,9 +12,9 @@ import (
 	"github.com/smartcontractkit/chainlink/core/assets"
 	"github.com/smartcontractkit/chainlink/core/logger"
 	"github.com/smartcontractkit/chainlink/core/services/eth"
+	"github.com/smartcontractkit/chainlink/core/services/postgres"
 	strpkg "github.com/smartcontractkit/chainlink/core/store"
 	"github.com/smartcontractkit/chainlink/core/store/models"
-	"github.com/smartcontractkit/chainlink/core/store/orm"
 	"github.com/smartcontractkit/chainlink/core/utils"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -23,6 +24,27 @@ import (
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
+
+// Config encompasses config used by bulletprooftxmanager package
+// Unless otherwise specified, these should support changing at runtime
+type Config interface {
+	ChainID() *big.Int
+	EthFinalityDepth() uint
+	EthGasBumpPercent() uint16
+	EthGasBumpThreshold() uint64
+	EthGasBumpTxDepth() uint16
+	EthGasBumpWei() *big.Int
+	EthGasLimitDefault() uint64
+	EthGasPriceDefault() *big.Int
+	EthMaxGasPriceWei() *big.Int
+	EthNonceAutoSync() bool
+	EthRPCDefaultBatchSize() uint32
+	EthTxReaperThreshold() time.Duration
+	EthTxReaperInterval() time.Duration
+	EthTxResendAfterThreshold() time.Duration
+	TriggerFallbackDBPollInterval() time.Duration
+	EthMaxInFlightTransactions() uint32
+}
 
 // For more information about the BulletproofTxManager architecture, see the design doc:
 // https://www.notion.so/chainlink/BulletproofTxManager-Architecture-Overview-9dc62450cd7a443ba9e7dceffa1a8d6b
@@ -190,7 +212,7 @@ func saveReplacementInProgressAttempt(store *strpkg.Store, oldAttempt models.Eth
 // - A configured percentage bump (ETH_GAS_BUMP_PERCENT) on top of the baseline price.
 // - A configured fixed amount of Wei (ETH_GAS_PRICE_WEI) on top of the baseline price.
 // The baseline price is the maximum of the previous gas price attempt and the node's current gas price.
-func BumpGas(config orm.ConfigReader, originalGasPrice *big.Int) (*big.Int, error) {
+func BumpGas(config Config, originalGasPrice *big.Int) (*big.Int, error) {
 	baselinePrice := max(originalGasPrice, config.EthGasPriceDefault())
 
 	var priceByPercentage = new(big.Int)
@@ -222,4 +244,12 @@ func max(a, b *big.Int) *big.Int {
 		return a
 	}
 	return b
+}
+
+// CountUnconfirmedTransactions returns the number of unconfirmed transactions
+func CountUnconfirmedTransactions(db *gorm.DB, fromAddress gethCommon.Address) (count uint32, err error) {
+	ctx, cancel := postgres.DefaultQueryCtx()
+	defer cancel()
+	err = db.WithContext(ctx).Raw(`SELECT count(*) FROM eth_txes WHERE from_address = ? AND state = 'unconfirmed'`, fromAddress).Scan(&count).Error
+	return
 }

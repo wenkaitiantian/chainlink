@@ -16,7 +16,6 @@ import (
 	"github.com/smartcontractkit/chainlink/core/services/postgres"
 	"github.com/smartcontractkit/chainlink/core/store"
 	"github.com/smartcontractkit/chainlink/core/store/models"
-	"github.com/smartcontractkit/chainlink/core/store/orm"
 	"github.com/smartcontractkit/chainlink/core/utils"
 
 	gethCommon "github.com/ethereum/go-ethereum/common"
@@ -50,7 +49,7 @@ type ethConfirmer struct {
 
 	store     *store.Store
 	ethClient eth.Client
-	config    orm.ConfigReader
+	config    Config
 	mb        *utils.Mailbox
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -62,7 +61,7 @@ type ethConfirmer struct {
 }
 
 // NewEthConfirmer instantiates a new eth confirmer
-func NewEthConfirmer(store *store.Store, config orm.ConfigReader) *ethConfirmer {
+func NewEthConfirmer(store *store.Store, config Config) *ethConfirmer {
 	var ethResender *EthResender
 	var reaper *Reaper
 	if config.EthTxResendAfterThreshold() > 0 {
@@ -664,8 +663,9 @@ func (ec *ethConfirmer) rebroadcastWhereNecessary(ctx context.Context, address g
 	}
 
 	threshold := int64(ec.config.EthGasBumpThreshold())
-	depth := int64(ec.config.EthGasBumpTxDepth())
-	etxs, err := FindEthTxsRequiringRebroadcast(ec.store.DB, address, blockHeight, threshold, depth)
+	bumpDepth := int64(ec.config.EthGasBumpTxDepth())
+	maxInFlightTransactions := ec.config.EthMaxInFlightTransactions()
+	etxs, err := FindEthTxsRequiringRebroadcast(ec.store.DB, address, blockHeight, threshold, bumpDepth, maxInFlightTransactions)
 	if err != nil {
 		return errors.Wrap(err, "FindEthTxsRequiringRebroadcast failed")
 	}
@@ -735,7 +735,7 @@ func getInProgressEthTxAttempts(s *store.Store, address gethCommon.Address) ([]m
 
 // FindEthTxsRequiringRebroadcast returns attempts that hit insufficient eth,
 // and attempts that need bumping, in nonce ASC order
-func FindEthTxsRequiringRebroadcast(db *gorm.DB, address gethCommon.Address, blockNum, gasBumpThreshold, depth int64) (etxs []models.EthTx, err error) {
+func FindEthTxsRequiringRebroadcast(db *gorm.DB, address gethCommon.Address, blockNum, gasBumpThreshold, bumpDepth int64, maxInFlightTransactions uint32) (etxs []models.EthTx, err error) {
 	// NOTE: These two queries could be combined into one using union but it
 	// becomes harder to read and difficult to test in isolation. KISS principle
 	etxInsufficientEths, err := FindEthTxsRequiringResubmissionDueToInsufficientEth(db, address)
@@ -743,7 +743,7 @@ func FindEthTxsRequiringRebroadcast(db *gorm.DB, address gethCommon.Address, blo
 		return nil, err
 	}
 
-	etxBumps, err := FindEthTxsRequiringGasBump(db, address, blockNum, gasBumpThreshold, depth)
+	etxBumps, err := FindEthTxsRequiringGasBump(db, address, blockNum, gasBumpThreshold, bumpDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -763,6 +763,11 @@ func FindEthTxsRequiringRebroadcast(db *gorm.DB, address gethCommon.Address, blo
 	sort.Slice(etxs, func(i, j int) bool {
 		return *(etxs[i].Nonce) < *(etxs[j].Nonce)
 	})
+
+	if maxInFlightTransactions > 0 && len(etxs) > int(maxInFlightTransactions) {
+		logger.Warnf("EthConfirmer: %d transactions to rebroadcast which exceeds limit of %d. %s", len(etxs), maxInFlightTransactions, utils.EthMaxInFlightTransactionsWarningLabel)
+		etxs = etxs[:maxInFlightTransactions]
+	}
 
 	return
 }

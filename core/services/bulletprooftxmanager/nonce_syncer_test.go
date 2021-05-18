@@ -30,7 +30,7 @@ func Test_NonceSyncer_SyncAll(t *testing.T) {
 			return from == addr
 		})).Return(uint64(0), errors.New("something exploded"))
 
-		ns := bulletprooftxmanager.NewNonceSyncer(store, store.Config, ethClient)
+		ns := bulletprooftxmanager.NewNonceSyncer(store, ethClient)
 
 		err := ns.SyncAll(context.Background())
 		require.Error(t, err)
@@ -55,7 +55,7 @@ func Test_NonceSyncer_SyncAll(t *testing.T) {
 			return from == addr
 		})).Return(uint64(0), nil)
 
-		ns := bulletprooftxmanager.NewNonceSyncer(store, store.Config, ethClient)
+		ns := bulletprooftxmanager.NewNonceSyncer(store, ethClient)
 
 		require.NoError(t, ns.SyncAll(context.Background()))
 
@@ -78,7 +78,7 @@ func Test_NonceSyncer_SyncAll(t *testing.T) {
 			return from == addr
 		})).Return(uint64(31), nil)
 
-		ns := bulletprooftxmanager.NewNonceSyncer(store, store.Config, ethClient)
+		ns := bulletprooftxmanager.NewNonceSyncer(store, ethClient)
 
 		require.NoError(t, ns.SyncAll(context.Background()))
 
@@ -107,7 +107,7 @@ func Test_NonceSyncer_SyncAll(t *testing.T) {
 			return acct1 == addr
 		})).Return(uint64(5), nil)
 
-		ns := bulletprooftxmanager.NewNonceSyncer(store, store.Config, ethClient)
+		ns := bulletprooftxmanager.NewNonceSyncer(store, ethClient)
 
 		require.NoError(t, ns.SyncAll(context.Background()))
 
@@ -130,7 +130,7 @@ func Test_NonceSyncer_SyncAll(t *testing.T) {
 			// by 1, but does not need to change when taking into account the in_progress tx
 			return acct1 == addr
 		})).Return(uint64(1), nil)
-		ns := bulletprooftxmanager.NewNonceSyncer(store, store.Config, ethClient)
+		ns := bulletprooftxmanager.NewNonceSyncer(store, ethClient)
 
 		require.NoError(t, ns.SyncAll(context.Background()))
 		assertDatabaseNonce(t, store, acct1, 0)
@@ -143,7 +143,7 @@ func Test_NonceSyncer_SyncAll(t *testing.T) {
 			// by 2, but only ahead by 1 if we count the in_progress tx as +1
 			return acct1 == addr
 		})).Return(uint64(2), nil)
-		ns = bulletprooftxmanager.NewNonceSyncer(store, store.Config, ethClient)
+		ns = bulletprooftxmanager.NewNonceSyncer(store, ethClient)
 
 		require.NoError(t, ns.SyncAll(context.Background()))
 		assertDatabaseNonce(t, store, acct1, 1)

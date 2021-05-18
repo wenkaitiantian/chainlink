@@ -138,12 +138,12 @@ func (korm ORM) SetLastRunHeightForUpkeepOnJob(db *gorm.DB, jobID int32, upkeepI
 func (korm ORM) CreateEthTransactionForUpkeep(tx *gorm.DB, upkeep UpkeepRegistration, payload []byte, maxUnconfirmedTXs uint64) (models.EthTx, error) {
 	var etx models.EthTx
 	from := upkeep.Registry.FromAddress.Address()
-	err := utils.CheckOKToTransmit(postgres.MustSQLDB(tx), from, maxUnconfirmedTXs)
+	sqlTx := postgres.MustSQLTx(tx)
+	err := utils.CheckEthTxQueueCapacity(sqlTx, from, maxUnconfirmedTXs)
 	if err != nil {
 		return etx, errors.Wrap(err, "transmitter#CreateEthTransaction")
 	}
 
-	sqlTx := postgres.MustSQLTx(tx)
 	value := 0
 	err = sqlTx.QueryRow(`
 		INSERT INTO eth_txes (from_address, to_address, encoded_payload, value, gas_limit, state, created_at)

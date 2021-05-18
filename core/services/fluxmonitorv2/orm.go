@@ -101,7 +101,7 @@ func (o *orm) CreateEthTransaction(
 	gasLimit uint64,
 	maxUnconfirmedTransactions uint64,
 ) error {
-	err := utils.CheckOKToTransmit(postgres.MustSQLDB(db), fromAddress, maxUnconfirmedTransactions)
+	err := utils.CheckEthTxQueueCapacity(db, fromAddress, maxUnconfirmedTransactions)
 	if err != nil {
 		return errors.Wrap(err, "orm#CreateEthTransaction")
 	}

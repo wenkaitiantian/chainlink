@@ -11,13 +11,17 @@ import (
 	"github.com/smartcontractkit/chainlink/core/services/postgres"
 	"github.com/smartcontractkit/chainlink/core/store"
 	"github.com/smartcontractkit/chainlink/core/store/models"
-	"github.com/smartcontractkit/chainlink/core/store/orm"
 	"github.com/smartcontractkit/chainlink/core/utils"
 
 	gethCommon "github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
+
+// InFlightTransactionRecheckInterval controls how often the EthBroadcaster
+// will poll the unconfirmed queue to see if it is allowed to send another
+// transaction
+const InFlightTransactionRecheckInterval = 1 * time.Second
 
 // EthBroadcaster monitors eth_txes for transactions that need to
 // be broadcast, assigns nonces and ensures that at least one eth node
@@ -44,7 +48,7 @@ type EthBroadcaster interface {
 type ethBroadcaster struct {
 	store     *store.Store
 	ethClient eth.Client
-	config    orm.ConfigReader
+	config    Config
 
 	ethTxInsertListener postgres.Subscription
 	eventBroadcaster    postgres.EventBroadcaster
@@ -61,7 +65,7 @@ type ethBroadcaster struct {
 }
 
 // NewEthBroadcaster returns a new concrete ethBroadcaster
-func NewEthBroadcaster(store *store.Store, config orm.ConfigReader, eventBroadcaster postgres.EventBroadcaster) EthBroadcaster {
+func NewEthBroadcaster(store *store.Store, config Config, eventBroadcaster postgres.EventBroadcaster) EthBroadcaster {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ethBroadcaster{
 		store:            store,
@@ -87,7 +91,7 @@ func (eb *ethBroadcaster) Start() error {
 	}
 
 	if eb.config.EthNonceAutoSync() {
-		syncer := NewNonceSyncer(eb.store, eb.config, eb.ethClient)
+		syncer := NewNonceSyncer(eb.store, eb.ethClient)
 		if err := syncer.SyncAll(eb.ctx); err != nil {
 			return errors.Wrap(err, "EthBroadcaster failed to sync with on-chain nonce")
 		}
@@ -207,6 +211,18 @@ func (eb *ethBroadcaster) processUnstartedEthTxs(fromAddress gethCommon.Address)
 		return errors.Wrap(err, "processUnstartedEthTxs failed")
 	}
 	for {
+		maxInFlightTransactions := eb.config.EthMaxInFlightTransactions()
+		if maxInFlightTransactions > 0 {
+			nUnconfirmed, err := CountUnconfirmedTransactions(eb.store.DB, fromAddress)
+			if err != nil {
+				return errors.Wrap(err, "CountUnconfirmedTransactions failed")
+			}
+			if nUnconfirmed >= maxInFlightTransactions {
+				logger.Warnf(`EthBroadcaster: transaction throttling; maximum number of in-flight transactions is %d per key. If this happens a lot, you might need to increase ETH_MAX_IN_FLIGHT_TRANSACTIONS. %s`, maxInFlightTransactions, utils.EthMaxInFlightTransactionsWarningLabel)
+				time.Sleep(InFlightTransactionRecheckInterval)
+				continue
+			}
+		}
 		etx, err := eb.nextUnstartedTransactionWithNonce(fromAddress)
 		if err != nil {
 			return errors.Wrap(err, "processUnstartedEthTxs failed")
