@@ -382,6 +382,7 @@ func fromEthBlock(ethBlock types.Block) Block {
 	block.Number = ethBlock.Number().Int64()
 	block.Hash = ethBlock.Hash()
 	block.ParentHash = ethBlock.ParentHash()
+
 	return block
 }
 
