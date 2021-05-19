@@ -142,7 +142,7 @@ func (bf *BlockFetcher) Chain(ctx context.Context, latestHead models.Head) (mode
 		return models.Head{}, errors.Wrapf(err, "BlockFetcher#Chain error for syncLatestHead: %v", latestHead.Number)
 	}
 	bf.logger.Debug("Returned from Chain")
-	return *headWithChain, nil
+	return headWithChain, nil
 }
 
 func (bf *BlockFetcher) SyncLatestHead(ctx context.Context, head models.Head) error {
@@ -393,7 +393,7 @@ func headFromBlock(ethBlock Block) models.Head {
 	return head
 }
 
-func (bf *BlockFetcher) syncLatestHead(ctx context.Context, head models.Head) (*models.Head, error) {
+func (bf *BlockFetcher) syncLatestHead(ctx context.Context, head models.Head) (models.Head, error) {
 	bf.syncingMut.Lock()
 	defer bf.syncingMut.Unlock()
 
@@ -423,10 +423,10 @@ func (bf *BlockFetcher) syncLatestHead(ctx context.Context, head models.Head) (*
 
 	ethBlockPtr, err := bf.ethClient.FastBlockByHash(ctx, head.Hash)
 	if ctx.Err() != nil {
-		return nil, nil
+		return models.Head{}, nil
 	}
 	if err != nil {
-		return nil, errors.Wrap(err, "FastBlockByHash failed")
+		return models.Head{}, errors.Wrap(err, "FastBlockByHash failed")
 	}
 
 	var ethBlock = *ethBlockPtr
@@ -455,7 +455,7 @@ func (bf *BlockFetcher) syncLatestHead(ctx context.Context, head models.Head) (*
 			if ctx.Err() != nil {
 				break
 			} else if err != nil {
-				return nil, errors.Wrap(err, "BlockByNumber failed")
+				return models.Head{}, errors.Wrap(err, "BlockByNumber failed")
 			}
 
 			block = fromEthBlock(*ethBlockPtr)
@@ -470,5 +470,5 @@ func (bf *BlockFetcher) syncLatestHead(ctx context.Context, head models.Head) (*
 		currentHead = &head
 	}
 	bf.logger.Debugf("Returning chain of length %v", chainTip.ChainLength())
-	return &chainTip, nil
+	return chainTip, nil
 }
