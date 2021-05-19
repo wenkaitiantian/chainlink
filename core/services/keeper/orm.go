@@ -138,39 +138,6 @@ func (korm ORM) SetLastRunHeightForUpkeepOnJob(db *gorm.DB, jobID int32, upkeepI
 func (korm ORM) CreateEthTransactionForUpkeep(tx *gorm.DB, upkeep UpkeepRegistration, payload []byte, maxUnconfirmedTXs uint64) (models.EthTx, error) {
 	var etx models.EthTx
 	from := upkeep.Registry.FromAddress.Address()
-	sqlTx := postgres.MustSQLTx(tx)
-	err := utils.CheckEthTxQueueCapacity(sqlTx, from, maxUnconfirmedTXs)
-	if err != nil {
-		return etx, errors.Wrap(err, "transmitter#CreateEthTransaction")
-	}
-
-	value := 0
-	err = sqlTx.QueryRow(`
-		INSERT INTO eth_txes (from_address, to_address, encoded_payload, value, gas_limit, state, created_at)
-		SELECT $1,$2,$3,$4,$5,'unstarted',NOW()
-		WHERE NOT EXISTS (
-			SELECT 1 FROM eth_tx_attempts
-			JOIN eth_txes ON eth_txes.id = eth_tx_attempts.eth_tx_id
-			WHERE eth_txes.from_address = $1
-				AND eth_txes.state = 'unconfirmed'
-				AND eth_tx_attempts.state = 'insufficient_eth'
-		) RETURNING id;`,
-		from,
-		upkeep.Registry.ContractAddress.Address(),
-		payload,
-		value,
-		upkeep.ExecuteGas+gasBuffer,
-	).Scan(&etx.ID)
-	if err != nil {
-		return etx, errors.Wrap(err, "keeper failed to insert eth_tx")
-	}
-	if etx.ID == 0 {
-		return etx, errors.New("a keeper eth_tx with insufficient eth is present, not creating a new eth_tx")
-	}
-	err = tx.First(&etx).Error
-	if err != nil {
-		return etx, errors.Wrap(err, "keeper find eth_tx after inserting")
-	}
-
-	return etx, nil
+	to := upkeep.Registry.ContractAddress.Address()
+	return bulletprooftxmanager.CreateEthTransaction(tx, from, to, payload, upkeep.ExecuteGas+gasBuffer, maxUnconfirmedTransactions)
 }

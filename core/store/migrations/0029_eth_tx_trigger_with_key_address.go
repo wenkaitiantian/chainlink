@@ -4,7 +4,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const up28 = `
+const up29 = `
 CREATE OR REPLACE FUNCTION public.notifyethtxinsertion() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -20,9 +20,9 @@ CREATE TRIGGER notify_eth_tx_insertion AFTER INSERT ON public.eth_txes FOR EACH 
 
 func init() {
 	Migrations = append(Migrations, &Migration{
-		ID: "0028_eth_tx_trigger_with_key_address",
+		ID: "0029_eth_tx_trigger_with_key_address",
 		Migrate: func(db *gorm.DB) error {
-			return db.Exec(up28).Error
+			return db.Exec(up29).Error
 		},
 		Rollback: func(db *gorm.DB) error {
 			return nil

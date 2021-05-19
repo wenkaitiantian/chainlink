@@ -3,6 +3,7 @@ package bulletprooftxmanager
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"math/big"
 	"time"
 
@@ -251,5 +252,48 @@ func CountUnconfirmedTransactions(db *gorm.DB, fromAddress gethCommon.Address) (
 	ctx, cancel := postgres.DefaultQueryCtx()
 	defer cancel()
 	err = db.WithContext(ctx).Raw(`SELECT count(*) FROM eth_txes WHERE from_address = ? AND state = 'unconfirmed'`, fromAddress).Scan(&count).Error
+	return
+}
+
+// CreateEthTransaction inserts a new transaction
+func CreateEthTransaction(db *gorm.DB, fromAddress, toAddress gethCommon.Address, payload []byte, gasLimit, maxUnconfirmedTransactions uint64) (etx models.EthTx, err error) {
+	err := utils.CheckEthTxQueueCapacity(db, fromAddress, maxUnconfirmedTransactions)
+	if err != nil {
+		return errors.Wrap(err, "transmitter#CreateEthTransaction")
+	}
+
+	value := 0
+	// NOTE: It is important to remember that eth_tx_attempts with state
+	// insufficient_eth can actually hang around long after the node has been
+	// refunded and started sending transactions again.
+	// This is because they are not ever deleted if attached to an eth_tx that
+	// is moved into confirmed/fatal_error state
+	res := db.Exec(`
+INSERT INTO eth_txes (from_address, to_address, encoded_payload, value, gas_limit, state, created_at)
+SELECT $1,$2,$3,$4,$5,'unstarted',NOW()
+WHERE NOT EXISTS (
+    SELECT 1 FROM eth_tx_attempts
+	JOIN eth_txes ON eth_txes.id = eth_tx_attempts.eth_tx_id
+	WHERE eth_txes.from_address = $1
+		AND eth_txes.state = 'unconfirmed'
+		AND eth_tx_attempts.state = 'insufficient_eth'
+);
+RETURNNG eth_txes.*
+`, fromAddress, toAddress, payload, value, gasLimit).Scan(&etx)
+	err = res.Error
+	if err != nil {
+		return errors.Wrap(err, "transmitter failed to insert eth_tx")
+	}
+
+	if res.RowsAffected == 0 {
+		err = errors.Errorf("wallet is out of eth: %s", fromAddress.Hex())
+		logger.Warnw(err.Error(),
+			"fromAddress", fromAddress,
+			"toAddress", toAddress,
+			"payload", "0x"+hex.EncodeToString(payload),
+			"value", value,
+			"gasLimit", gasLimit,
+		)
+	}
 	return
 }

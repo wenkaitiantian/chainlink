@@ -3,8 +3,6 @@ package fluxmonitorv2
 import (
 	"encoding/hex"
 
-	"github.com/smartcontractkit/chainlink/core/services/postgres"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
 	"github.com/smartcontractkit/chainlink/core/logger"
