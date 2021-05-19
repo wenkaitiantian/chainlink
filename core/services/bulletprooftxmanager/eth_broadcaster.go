@@ -40,7 +40,7 @@ type EthBroadcaster interface {
 	Start() error
 	Close() error
 
-	Trigger()
+	Trigger(gethCommon.Address)
 
 	ProcessUnstartedEthTxs(models.Key) error
 }
@@ -53,9 +53,10 @@ type ethBroadcaster struct {
 	ethTxInsertListener postgres.Subscription
 	eventBroadcaster    postgres.EventBroadcaster
 
-	// trigger allows other goroutines to force ethBroadcaster to rescan the
+	// triggers allow other goroutines to force ethBroadcaster to rescan the
 	// database early (before the next poll interval)
-	trigger chan struct{}
+	// Each key has its own trigger
+	triggers map[gethCommon.Address]chan struct{}
 
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -67,11 +68,12 @@ type ethBroadcaster struct {
 // NewEthBroadcaster returns a new concrete ethBroadcaster
 func NewEthBroadcaster(store *store.Store, config Config, eventBroadcaster postgres.EventBroadcaster) EthBroadcaster {
 	ctx, cancel := context.WithCancel(context.Background())
+	triggers := make(map[gethCommon.Address]chan struct{})
 	return &ethBroadcaster{
 		store:            store,
 		config:           config,
 		ethClient:        store.EthClient,
-		trigger:          make(chan struct{}, 1),
+		triggers:         triggers,
 		ctx:              ctx,
 		ctxCancel:        cancel,
 		wg:               sync.WaitGroup{},
@@ -80,30 +82,37 @@ func NewEthBroadcaster(store *store.Store, config Config, eventBroadcaster postg
 }
 
 func (eb *ethBroadcaster) Start() error {
-	if !eb.OkayToStart() {
-		return errors.New("EthBroadcaster is already started")
-	}
-
-	var err error
-	eb.ethTxInsertListener, err = eb.eventBroadcaster.Subscribe(postgres.ChannelInsertOnEthTx, "")
-	if err != nil {
-		return errors.Wrap(err, "EthBroadcaster could not start")
-	}
-
-	if eb.config.EthNonceAutoSync() {
-		syncer := NewNonceSyncer(eb.store, eb.ethClient)
-		if err := syncer.SyncAll(eb.ctx); err != nil {
-			return errors.Wrap(err, "EthBroadcaster failed to sync with on-chain nonce")
+	return eb.StartOnce("EthBroadcaster", func() (err error) {
+		eb.ethTxInsertListener, err = eb.eventBroadcaster.Subscribe(postgres.ChannelInsertOnEthTx, "")
+		if err != nil {
+			return errors.Wrap(err, "EthBroadcaster could not start")
 		}
-	}
 
-	eb.wg.Add(1)
-	go eb.monitorEthTxs()
+		if eb.config.EthNonceAutoSync() {
+			syncer := NewNonceSyncer(eb.store, eb.ethClient)
+			if err := syncer.SyncAll(eb.ctx); err != nil {
+				return errors.Wrap(err, "EthBroadcaster failed to sync with on-chain nonce")
+			}
+		}
 
-	eb.wg.Add(1)
-	go eb.ethTxInsertTriggerer()
+		keys, err := eb.store.SendKeys()
+		if err != nil {
+			return errors.Wrap(err, "EthBroadcaster failed to load keys")
+		}
 
-	return nil
+		// FIXME: What about adding keys at runtime?
+		eb.wg.Add(len(keys))
+		for _, k := range keys {
+			triggerCh := make(chan struct{}, 1)
+			eb.triggers[k.Address.Address()] = triggerCh
+			go eb.monitorEthTxs(k, triggerCh)
+		}
+
+		eb.wg.Add(1)
+		go eb.ethTxInsertTriggerer()
+
+		return nil
+	})
 }
 
 func (eb *ethBroadcaster) Close() error {
@@ -121,10 +130,23 @@ func (eb *ethBroadcaster) Close() error {
 	return nil
 }
 
-func (eb *ethBroadcaster) Trigger() {
-	select {
-	case eb.trigger <- struct{}{}:
-	default:
+// Trigger forces the monitor for a particular address to recheck for new eth_txes
+// Logs error and does nothing if address was not registered on startup
+func (eb *ethBroadcaster) Trigger(addr gethCommon.Address) {
+	ok := eb.IfStarted(func() {
+		triggerCh, exists := eb.triggers[addr]
+		if !exists {
+			logger.Errorf("EthBroadcaster: attempted trigger for address %s which is not registered", addr.Hex())
+			return
+		}
+		select {
+		case triggerCh <- struct{}{}:
+		default:
+		}
+	})
+
+	if !ok {
+		logger.Debugf("EthBroadcaster: unstarted; ignoring trigger for %s", addr.Hex())
 	}
 }
 
@@ -132,40 +154,23 @@ func (eb *ethBroadcaster) ethTxInsertTriggerer() {
 	defer eb.wg.Done()
 	for {
 		select {
-		case <-eb.ethTxInsertListener.Events():
-			eb.Trigger()
+		case ev := <-eb.ethTxInsertListener.Events():
+			hexAddr := ev.Payload
+			address := gethCommon.HexToAddress(hexAddr)
+			eb.Trigger(address)
 		case <-eb.ctx.Done():
 			return
 		}
 	}
 }
 
-func (eb *ethBroadcaster) monitorEthTxs() {
+func (eb *ethBroadcaster) monitorEthTxs(k models.Key, triggerCh chan struct{}) {
 	defer eb.wg.Done()
 	for {
 		pollDBTimer := time.NewTimer(utils.WithJitter(eb.config.TriggerFallbackDBPollInterval()))
 
-		keys, err := eb.store.SendKeys()
-
-		if err != nil {
-			logger.Error(errors.Wrap(err, "monitorEthTxs failed getting key"))
-		} else {
-			var wg sync.WaitGroup
-
-			// It is safe to process separate keys concurrently
-			// NOTE: This design will block one key if another takes a really long time to execute
-			wg.Add(len(keys))
-			for _, key := range keys {
-				go func(k models.Key) {
-					if err := eb.ProcessUnstartedEthTxs(k); err != nil {
-						logger.Errorw("Error in ProcessUnstartedEthTxs", "error", err)
-					}
-
-					wg.Done()
-				}(key)
-			}
-
-			wg.Wait()
+		if err := eb.ProcessUnstartedEthTxs(k); err != nil {
+			logger.Errorw("Error in ProcessUnstartedEthTxs", "error", err)
 		}
 
 		select {
@@ -175,7 +180,7 @@ func (eb *ethBroadcaster) monitorEthTxs() {
 				<-pollDBTimer.C
 			}
 			return
-		case <-eb.trigger:
+		case <-triggerCh:
 			// EthTx was inserted
 			if !pollDBTimer.Stop() {
 				<-pollDBTimer.C

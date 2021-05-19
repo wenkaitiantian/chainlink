@@ -37,7 +37,7 @@ const (
 // NotifyNewEthTx allows to notify the ethBroadcaster of a new transaction
 //go:generate mockery --name NotifyNewEthTx --output ../internal/mocks/ --case=underscore
 type NotifyNewEthTx interface {
-	Trigger()
+	Trigger(fromAddress common.Address)
 }
 
 // Store contains fields for the database, Config, and KeyStore

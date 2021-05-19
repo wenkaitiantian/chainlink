@@ -109,7 +109,7 @@ func init() {
 		EthGasBumpThreshold:              3,
 		EthGasBumpWei:                    big.NewInt(5000000000),    // 5 Gwei
 		EthGasPriceDefault:               big.NewInt(20000000000),   // 20 Gwei
-		EthMaxGasPriceWei:                big.NewInt(1500000000000), // 1.5 Twei
+		EthMaxGasPriceWei:                big.NewInt(5000000000000), // 5 Twei
 		EthMinGasPriceWei:                big.NewInt(1000000000),    // 1 Gwei
 		EthFinalityDepth:                 50,
 		EthHeadTrackerHistoryDepth:       100,

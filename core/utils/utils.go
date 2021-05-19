@@ -921,12 +921,15 @@ func (once *StartStopOnce) State() StartStopOnceState {
 	return once.state
 }
 
-func (once *StartStopOnce) IfStarted(f func()) {
+// IfStarted runs the func and returns true only if started, otherwise returns false
+func (once *StartStopOnce) IfStarted(f func()) (ok bool) {
 	once.RLock()
 	defer once.RUnlock()
 	if once.state == StartStopOnce_Started {
 		f()
+		return true
 	}
+	return false
 }
 
 // WithJitter adds +/- 10% to a duration

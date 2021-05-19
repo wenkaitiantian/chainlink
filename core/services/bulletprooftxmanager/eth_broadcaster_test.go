@@ -1266,9 +1266,9 @@ func TestEthBroadcaster_Trigger(t *testing.T) {
 	eb, cleanup := cltest.NewEthBroadcaster(t, store, config)
 	defer cleanup()
 
-	eb.Trigger()
-	eb.Trigger()
-	eb.Trigger()
+	eb.Trigger(cltest.NewAddress())
+	eb.Trigger(cltest.NewAddress())
+	eb.Trigger(cltest.NewAddress())
 }
 
 func TestEthBroadcaster_EthTxInsertEventCausesTriggerToFire(t *testing.T) {

@@ -158,7 +158,7 @@ func TestIntegration_HttpRequestWithHeaders(t *testing.T) {
 	j := cltest.CreateHelloWorldJobViaWeb(t, app, mockServer.URL)
 	jr := cltest.WaitForJobRunToPendOutgoingConfirmations(t, app.Store, cltest.CreateJobRunViaWeb(t, app, j))
 
-	app.EthBroadcaster.Trigger()
+	app.EthBroadcaster.Trigger(app.Key.Address.Address())
 	cltest.WaitForEthTxAttemptCount(t, app.Store, 1)
 
 	// Do the thing
@@ -321,7 +321,6 @@ func TestIntegration_RunLog(t *testing.T) {
 			ethClient.On("TransactionReceipt", mock.Anything, mock.Anything).
 				Return(confirmedReceipt, nil)
 
-			app.EthBroadcaster.Trigger()
 			jr = cltest.WaitForJobRunStatus(t, app.Store, jr, test.wantStatus)
 			assert.True(t, jr.FinishedAt.Valid)
 			assert.Equal(t, int64(requiredConfs), int64(jr.TaskRuns[0].ObservedIncomingConfirmations.Uint32))
@@ -1073,7 +1072,7 @@ func TestIntegration_FluxMonitor_Deviation(t *testing.T) {
 	jrs := cltest.WaitForRuns(t, j, app.Store, 1)
 	jr := cltest.WaitForJobRunToPendOutgoingConfirmations(t, app.Store, jrs[0])
 
-	app.EthBroadcaster.Trigger()
+	app.EthBroadcaster.Trigger(address)
 	cltest.WaitForEthTxAttemptCount(t, app.Store, 1)
 
 	// Check the FM price on completed run output
@@ -1230,7 +1229,7 @@ func TestIntegration_FluxMonitor_NewRound(t *testing.T) {
 
 	jrs := cltest.WaitForRuns(t, j, app.Store, 1)
 	_ = cltest.WaitForJobRunToPendOutgoingConfirmations(t, app.Store, jrs[0])
-	app.EthBroadcaster.Trigger()
+	app.EthBroadcaster.Trigger(app.Key.Address.Address())
 	cltest.WaitForEthTxAttemptCount(t, app.Store, 1)
 
 	_ = cltest.SendBlocksUntilComplete(t, app.Store, jrs[0], newHeads, safe, ethClient)
@@ -1307,7 +1306,7 @@ func TestIntegration_MultiwordV1(t *testing.T) {
 	j := cltest.CreateSpecViaWeb(t, app, spec)
 	jr := cltest.CreateJobRunViaWeb(t, app, j)
 	_ = cltest.WaitForJobRunStatus(t, app.Store, jr, models.RunStatusPendingOutgoingConfirmations)
-	app.EthBroadcaster.Trigger()
+	app.EthBroadcaster.Trigger(app.Key.Address.Address())
 	cltest.WaitForEthTxAttemptCount(t, app.Store, 1)
 
 	// Feed the subscriber a block head so the transaction completes.
@@ -1441,7 +1440,7 @@ func TestIntegration_MultiwordV1_Sim(t *testing.T) {
 	defer tick.Stop()
 	go func() {
 		for range tick.C {
-			app.EthBroadcaster.Trigger()
+			app.EthBroadcaster.Trigger(app.Key.Address.Address())
 			b.Commit()
 		}
 	}()
