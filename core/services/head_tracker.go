@@ -111,7 +111,7 @@ func (ht *HeadTracker) Start() error {
 			)
 		}
 
-		ht.wgDone.Add(4)
+		ht.wgDone.Add(3)
 		go ht.headListener.ListenForNewHeads(ht.handleNewHead, ht.handleConnected)
 		ht.blockFetcher.Backfill(ht.chStop)
 		go ht.backfiller()
@@ -127,6 +127,7 @@ func (ht *HeadTracker) Stop() error {
 		ht.logger().Info(fmt.Sprintf("HeadTracker disconnecting from %v", ht.store.Config.EthereumURL()))
 		close(ht.chStop)
 		ht.wgDone.Wait()
+		ht.logger().Info("HeadTracker finished waiting for subprocesses")
 		return nil
 	})
 }
