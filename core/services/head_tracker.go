@@ -113,7 +113,6 @@ func (ht *HeadTracker) Start() error {
 
 		ht.wgDone.Add(3)
 		go ht.headListener.ListenForNewHeads(ht.handleNewHead, ht.handleConnected)
-		ht.blockFetcher.Backfill(ht.chStop)
 		go ht.backfiller()
 		go ht.headSampler()
 

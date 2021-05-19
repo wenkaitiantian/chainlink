@@ -54,7 +54,7 @@ func TestHeadTracker_New(t *testing.T) {
 	assert.Nil(t, store.IdempotentInsertHead(context.TODO(), *last))
 	assert.Nil(t, store.IdempotentInsertHead(context.TODO(), *cltest.Head(10)))
 
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{})
 	assert.Nil(t, ht.Start())
 	assert.Equal(t, last.Number, ht.HighestSeenHead().Number)
@@ -76,7 +76,7 @@ func TestHeadTracker_Save_InsertsAndTrimsTable(t *testing.T) {
 		assert.Nil(t, store.IdempotentInsertHead(context.TODO(), *cltest.Head(idx)))
 	}
 
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{})
 
 	h := cltest.Head(200)
@@ -136,7 +136,7 @@ func TestHeadTracker_Get(t *testing.T) {
 				assert.Nil(t, store.IdempotentInsertHead(context.TODO(), *test.initial))
 			}
 
-			bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+			bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 			ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{})
 			ht.Start()
 			defer ht.Stop()
@@ -169,7 +169,7 @@ func TestHeadTracker_Start_NewHeads(t *testing.T) {
 		Run(func(mock.Arguments) { close(chStarted) }).
 		Return(sub, nil)
 
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{})
 
 	assert.NoError(t, ht.Start())
@@ -206,7 +206,7 @@ func TestHeadTracker_CallsHeadTrackableCallbacks(t *testing.T) {
 
 	checker := &cltest.MockHeadTrackable{}
 
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{checker}, cltest.NeverSleeper{})
 
 	assert.Nil(t, ht.Start())
@@ -245,7 +245,7 @@ func TestHeadTracker_ReconnectOnError(t *testing.T) {
 
 	checker := &cltest.MockHeadTrackable{}
 
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{checker}, cltest.NeverSleeper{})
 
 	// connect
@@ -308,7 +308,7 @@ func TestHeadTracker_StartConnectsFromLastSavedHeader(t *testing.T) {
 	checker := &cltest.MockHeadTrackable{ConnectedCallback: func(bn *models.Head) {
 		connectedValue.Store(bn.ToInt())
 	}}
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{checker}, cltest.NeverSleeper{})
 
 	require.NoError(t, ht.Save(context.TODO(), models.NewHead(lastSavedBN, cltest.NewHash(), cltest.NewHash(), 0)))
@@ -353,7 +353,7 @@ func TestHeadTracker_SwitchesToLongestChain(t *testing.T) {
 	logger := store.Config.CreateProductionLogger()
 
 	checker := new(mocks.HeadTrackable)
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{checker}, cltest.NeverSleeper{})
 
 	chchHeaders := make(chan chan<- *models.Head, 1)
@@ -558,7 +558,7 @@ func TestHeadTracker_Backfill(t *testing.T) {
 		ethClient := new(mocks.Client)
 		store.EthClient = ethClient
 
-		bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+		bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 		ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{}, cltest.NeverSleeper{})
 
 		err := ht.Backfill(ctx, h12, 2)
@@ -581,7 +581,7 @@ func TestHeadTracker_Backfill(t *testing.T) {
 		ethClient.On("HeaderByNumber", mock.Anything, big.NewInt(10)).
 			Return(&head10, nil)
 
-		bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+		bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 		ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{}, cltest.NeverSleeper{})
 
 		var depth uint = 3
@@ -617,7 +617,7 @@ func TestHeadTracker_Backfill(t *testing.T) {
 		ethClient := new(mocks.Client)
 		store.EthClient = ethClient
 
-		bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+		bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 		ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{}, cltest.NeverSleeper{})
 
 		ethClient.On("HeaderByNumber", mock.Anything, big.NewInt(10)).
@@ -653,7 +653,7 @@ func TestHeadTracker_Backfill(t *testing.T) {
 		ethClient := new(mocks.Client)
 		store.EthClient = ethClient
 
-		bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+		bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 		ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{}, cltest.NeverSleeper{})
 
 		err := ht.Backfill(ctx, h15, 3)
@@ -675,7 +675,7 @@ func TestHeadTracker_Backfill(t *testing.T) {
 		ethClient.On("HeaderByNumber", mock.Anything, big.NewInt(0)).
 			Return(&head0, nil)
 
-		bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+		bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 		ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{}, cltest.NeverSleeper{})
 
 		require.NoError(t, store.IdempotentInsertHead(context.TODO(), h1))
@@ -709,7 +709,7 @@ func TestHeadTracker_Backfill(t *testing.T) {
 			Return(nil, ethereum.NotFound).
 			Once()
 
-		bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+		bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 		ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{}, cltest.NeverSleeper{})
 
 		err := ht.Backfill(ctx, h12, 400)
@@ -741,7 +741,7 @@ func TestHeadTracker_Backfill(t *testing.T) {
 		ethClient.On("HeaderByNumber", mock.Anything, big.NewInt(8)).
 			Return(nil, context.DeadlineExceeded)
 
-		bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+		bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 		ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{}, cltest.NeverSleeper{})
 
 		err := ht.Backfill(ctx, h12, 400)

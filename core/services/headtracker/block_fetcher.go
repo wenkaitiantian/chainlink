@@ -89,14 +89,7 @@ func NewBlockFetcher(ethClient eth.Client, config BlockFetcherConfig, logger *lo
 	}
 }
 
-func (bf *BlockFetcher) Backfill(chStop chan struct{}) {
-	ctx, _ := utils.ContextFromChan(chStop)
-
-	latestHead, err := bf.FetchLatestHead(ctx)
-	if err != nil {
-		bf.logger.Errorw("BlockFetcher#FetchLatestHead returned an error, backfill will be skipped", "err", err)
-	}
-
+func (bf *BlockFetcher) Backfill(ctx context.Context, latestHead models.Head) {
 	from := latestHead.Number - int64(bf.config.BlockFetcherHistorySize()-1)
 	if from < 0 {
 		from = 0
@@ -146,6 +139,15 @@ func (bf *BlockFetcher) Chain(ctx context.Context, latestHead models.Head) (mode
 }
 
 func (bf *BlockFetcher) SyncLatestHead(ctx context.Context, head models.Head) error {
+	bf.mut.Lock()
+	cacheSize := len(bf.recent)
+	bf.mut.Unlock()
+
+	if cacheSize == 0 {
+		bf.logger.Debug("SyncLatestHead: cache is empty, will backfill using batch calls")
+		bf.Backfill(ctx, head)
+	}
+
 	_, err := bf.syncLatestHead(ctx, head)
 	bf.logger.Debug("Returned from SyncLatestHead")
 	return err

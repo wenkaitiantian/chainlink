@@ -42,7 +42,7 @@ func TestHeadBroadcaster_Subscribe(t *testing.T) {
 	checker2 := &cltest.MockHeadTrackable{}
 
 	hr := services.NewHeadBroadcaster()
-	bf := headtracker.NewBlockFetcher(ethClient, store.Config)
+	bf := headtracker.NewBlockFetcher(ethClient, store.Config, logger)
 	ht := services.NewHeadTracker(logger, store, bf, []strpkg.HeadTrackable{hr}, cltest.NeverSleeper{})
 	require.NoError(t, hr.Start())
 	defer hr.Close()
