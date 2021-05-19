@@ -33,7 +33,7 @@ type BlockFetcherConfig interface {
 
 type BlockFetcherInterface interface {
 	FetchLatestHead(ctx context.Context) (*models.Head, error)
-	BlockRange(ctx context.Context, head models.Head, fromBlock int64, toBlock int64) ([]Block, error)
+	BlockRange(ctx context.Context, fromBlock int64, toBlock int64) ([]Block, error)
 }
 
 type BlockFetcher struct {
@@ -111,10 +111,10 @@ func (bf *BlockFetcher) FetchLatestHead(ctx context.Context) (*models.Head, erro
 }
 
 // BlockRange - Returns a range of blocks, either from local memory or fetched
-func (bf *BlockFetcher) BlockRange(ctx context.Context, head models.Head, fromBlock int64, toBlock int64) ([]Block, error) {
+func (bf *BlockFetcher) BlockRange(ctx context.Context, fromBlock int64, toBlock int64) ([]Block, error) {
 	bf.logger.Debugw("BlockFetcher#BlockRange requested range", "fromBlock", fromBlock, "toBlock", toBlock)
 
-	blocks, err := bf.GetBlockRange(ctx, head, fromBlock, toBlock)
+	blocks, err := bf.GetBlockRange(ctx, fromBlock, toBlock)
 	if err != nil {
 		return nil, errors.Wrapf(err, "BlockFetcher#GetBlockRange error for %v -> %v",
 			fromBlock, toBlock)
@@ -128,7 +128,7 @@ func (bf *BlockFetcher) BlockRange(ctx context.Context, head models.Head, fromBl
 }
 
 func (bf *BlockFetcher) Chain(ctx context.Context, latestHead models.Head) (models.Head, error) {
-	bf.logger.Debugw("BlockFetcher#Chain for head", "number", latestHead.Number, "hash", latestHead.Hash)
+	bf.logger.Debugf("BlockFetcher#Chain for head: %v %v", latestHead.Number, latestHead.Hash)
 
 	from := latestHead.Number - int64(bf.config.EthFinalityDepth()-1)
 	if from < 0 {
@@ -185,7 +185,8 @@ func (bf *BlockFetcher) RecentSorted() []*Block {
 	})
 	return toReturn
 }
-func (bf *BlockFetcher) GetBlockRange(ctx context.Context, head models.Head, fromBlock int64, toBlock int64) ([]*Block, error) {
+
+func (bf *BlockFetcher) GetBlockRange(ctx context.Context, fromBlock int64, toBlock int64) ([]*Block, error) {
 	bf.logger.Debugw("BlockFetcher#BlockRange requested range", "fromBlock", fromBlock, "toBlock", toBlock)
 
 	if fromBlock < 0 || toBlock < fromBlock {
@@ -422,6 +423,7 @@ func (bf *BlockFetcher) syncLatestHead(ctx context.Context, head models.Head) (m
 			"toBlockHeight", head.Number)
 	}()
 
+	bf.logger.Debugf("Fetching block by hash: %v", head.Hash)
 	ethBlockPtr, err := bf.ethClient.FastBlockByHash(ctx, head.Hash)
 	if ctx.Err() != nil {
 		return models.Head{}, nil
@@ -440,14 +442,21 @@ func (bf *BlockFetcher) syncLatestHead(ctx context.Context, head models.Head) (m
 	var chainTip = head
 	var currentHead = &chainTip
 
-	bf.logger.Debugf("Latest block number: %v", block.Number)
+	bf.logger.Debugf("Latest block: %v, %v", block.Number, block.Hash)
 
 	for i := block.Number - 1; i >= from; i-- {
+
+		zeroHash := common.Hash{}
+		if currentHead.ParentHash == zeroHash {
+			bf.logger.Debugf("currentHead.ParentHash is zero - returning")
+			break
+		}
 		// NOTE: Sequential requests here mean it's a potential performance bottleneck, be aware!
 		var existingBlock *Block
-		existingBlock = bf.findBlockByHash(currentHead.Hash)
+		existingBlock = bf.findBlockByHash(currentHead.ParentHash)
 		if existingBlock != nil {
 			block = *existingBlock
+			bf.logger.Debugf("Found block: %v - %v", block.Number, block.Hash)
 		} else {
 			bf.logger.Debugf("Fetching BlockByNumber: %v, as existing block was not found by %v", i, head.Hash)
 			//TODO: perhaps implement FastBlockByNumber
