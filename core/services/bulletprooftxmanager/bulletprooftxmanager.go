@@ -14,7 +14,6 @@ import (
 	"github.com/smartcontractkit/chainlink/core/logger"
 	"github.com/smartcontractkit/chainlink/core/services/eth"
 	"github.com/smartcontractkit/chainlink/core/services/postgres"
-	strpkg "github.com/smartcontractkit/chainlink/core/store"
 	"github.com/smartcontractkit/chainlink/core/store/models"
 	"github.com/smartcontractkit/chainlink/core/utils"
 
@@ -36,6 +35,7 @@ type Config interface {
 	EthGasBumpTxDepth() uint16
 	EthGasBumpWei() *big.Int
 	EthGasLimitDefault() uint64
+	EthGasLimitMultiplier() float32
 	EthGasPriceDefault() *big.Int
 	EthMaxGasPriceWei() *big.Int
 	EthNonceAutoSync() bool
@@ -45,6 +45,13 @@ type Config interface {
 	EthTxResendAfterThreshold() time.Duration
 	TriggerFallbackDBPollInterval() time.Duration
 	EthMaxInFlightTransactions() uint32
+	OptimismGasFees() bool
+}
+
+// KeyStore encompasses the subset of keystore used by bulletprooftxmanager
+type KeyStore interface {
+	GetAccountByAddress(gethCommon.Address) (gethAccounts.Account, error)
+	SignTx(account gethAccounts.Account, tx *gethTypes.Transaction, chainID *big.Int) (*gethTypes.Transaction, error)
 }
 
 // For more information about the BulletproofTxManager architecture, see the design doc:
@@ -70,7 +77,7 @@ var (
 const optimismGasPrice int64 = 1e9 // 1 GWei
 
 // SendEther creates a transaction that transfers the given value of ether
-func SendEther(s *strpkg.Store, from, to gethCommon.Address, value assets.Eth) (etx models.EthTx, err error) {
+func SendEther(db *gorm.DB, from, to gethCommon.Address, value assets.Eth) (etx models.EthTx, err error) {
 	if to == utils.ZeroAddress {
 		return etx, errors.New("cannot send ether to zero address")
 	}
@@ -79,29 +86,29 @@ func SendEther(s *strpkg.Store, from, to gethCommon.Address, value assets.Eth) (
 		ToAddress:      to,
 		EncodedPayload: []byte{},
 		Value:          value,
-		GasLimit:       s.Config.EthGasLimitDefault(),
+		GasLimit:       21000,
 		State:          models.EthTxUnstarted,
 	}
-	err = s.DB.Create(&etx).Error
+	err = db.Create(&etx).Error
 	return etx, err
 }
 
-func newAttempt(ctx context.Context, s *strpkg.Store, etx models.EthTx, suggestedGasPrice *big.Int) (models.EthTxAttempt, error) {
+func newAttempt(ctx context.Context, ethClient eth.Client, ks KeyStore, config Config, etx models.EthTx, suggestedGasPrice *big.Int) (models.EthTxAttempt, error) {
 	attempt := models.EthTxAttempt{}
-	account, err := s.KeyStore.GetAccountByAddress(etx.FromAddress)
+	account, err := ks.GetAccountByAddress(etx.FromAddress)
 	if err != nil {
 		return attempt, errors.Wrapf(err, "error getting account %s for transaction %v", etx.FromAddress.String(), etx.ID)
 	}
 
-	gasPrice := s.Config.EthGasPriceDefault()
+	gasPrice := config.EthGasPriceDefault()
 	if suggestedGasPrice != nil {
 		gasPrice = suggestedGasPrice
 	}
 
-	if s.Config.OptimismGasFees() {
+	if config.OptimismGasFees() {
 		// Optimism requires special handling, it assumes that clients always call EstimateGas
 		callMsg := ethereum.CallMsg{To: &etx.ToAddress, From: etx.FromAddress, Data: etx.EncodedPayload}
-		gasLimit, estimateGasErr := s.EthClient.EstimateGas(ctx, callMsg)
+		gasLimit, estimateGasErr := ethClient.EstimateGas(ctx, callMsg)
 		if estimateGasErr != nil {
 			return attempt, errors.Wrapf(estimateGasErr, "error getting gas price for new transaction %v", etx.ID)
 		}
@@ -109,11 +116,11 @@ func newAttempt(ctx context.Context, s *strpkg.Store, etx models.EthTx, suggeste
 		gasPrice = big.NewInt(optimismGasPrice)
 	}
 
-	gasLimit := decimal.NewFromBigInt(big.NewInt(0).SetUint64(etx.GasLimit), 0).Mul(decimal.NewFromFloat32(s.Config.EthGasLimitMultiplier())).IntPart()
+	gasLimit := decimal.NewFromBigInt(big.NewInt(0).SetUint64(etx.GasLimit), 0).Mul(decimal.NewFromFloat32(config.EthGasLimitMultiplier())).IntPart()
 	etx.GasLimit = (uint64)(gasLimit)
 
 	transaction := gethTypes.NewTransaction(uint64(*etx.Nonce), etx.ToAddress, etx.Value.ToInt(), etx.GasLimit, gasPrice, etx.EncodedPayload)
-	hash, signedTxBytes, err := signTx(s.KeyStore, account, transaction, s.Config.ChainID())
+	hash, signedTxBytes, err := signTx(ks, account, transaction, config.ChainID())
 	if err != nil {
 		return attempt, errors.Wrapf(err, "error using account %s to sign transaction %v", etx.FromAddress.String(), etx.ID)
 	}
@@ -127,7 +134,7 @@ func newAttempt(ctx context.Context, s *strpkg.Store, etx models.EthTx, suggeste
 	return attempt, nil
 }
 
-func signTx(keyStore strpkg.KeyStoreInterface, account gethAccounts.Account, tx *gethTypes.Transaction, chainID *big.Int) (gethCommon.Hash, []byte, error) {
+func signTx(keyStore KeyStore, account gethAccounts.Account, tx *gethTypes.Transaction, chainID *big.Int) (gethCommon.Hash, []byte, error) {
 	signedTx, err := keyStore.SignTx(account, tx, chainID)
 	if err != nil {
 		return gethCommon.Hash{}, nil, errors.Wrap(err, "signTx failed")
@@ -167,7 +174,7 @@ func sendTransaction(ctx context.Context, ethClient eth.Client, a models.EthTxAt
 // May be useful for clearing stuck nonces
 func sendEmptyTransaction(
 	ethClient eth.Client,
-	keyStore strpkg.KeyStoreInterface,
+	keyStore KeyStore,
 	nonce uint64,
 	gasLimit uint64,
 	gasPriceWei *big.Int,
@@ -187,21 +194,21 @@ func sendEmptyTransaction(
 }
 
 // makes a transaction that sends 0 eth to self
-func makeEmptyTransaction(keyStore strpkg.KeyStoreInterface, nonce uint64, gasLimit uint64, gasPriceWei *big.Int, account gethAccounts.Account, chainID *big.Int) (*gethTypes.Transaction, error) {
+func makeEmptyTransaction(keyStore KeyStore, nonce uint64, gasLimit uint64, gasPriceWei *big.Int, account gethAccounts.Account, chainID *big.Int) (*gethTypes.Transaction, error) {
 	value := big.NewInt(0)
 	payload := []byte{}
 	tx := gethTypes.NewTransaction(nonce, account.Address, value, gasLimit, gasPriceWei, payload)
 	return keyStore.SignTx(account, tx, chainID)
 }
 
-func saveReplacementInProgressAttempt(store *strpkg.Store, oldAttempt models.EthTxAttempt, replacementAttempt *models.EthTxAttempt) error {
+func saveReplacementInProgressAttempt(db *gorm.DB, oldAttempt models.EthTxAttempt, replacementAttempt *models.EthTxAttempt) error {
 	if oldAttempt.State != models.EthTxAttemptInProgress || replacementAttempt.State != models.EthTxAttemptInProgress {
 		return errors.New("expected attempts to be in_progress")
 	}
 	if oldAttempt.ID == 0 {
 		return errors.New("expected oldAttempt to have an ID")
 	}
-	return store.Transaction(func(tx *gorm.DB) error {
+	return postgres.GormTransactionWithDefaultContext(db, func(tx *gorm.DB) error {
 		if err := tx.Exec(`DELETE FROM eth_tx_attempts WHERE id = ? `, oldAttempt.ID).Error; err != nil {
 			return errors.Wrap(err, "saveReplacementInProgressAttempt failed")
 		}
@@ -257,9 +264,9 @@ func CountUnconfirmedTransactions(db *gorm.DB, fromAddress gethCommon.Address) (
 
 // CreateEthTransaction inserts a new transaction
 func CreateEthTransaction(db *gorm.DB, fromAddress, toAddress gethCommon.Address, payload []byte, gasLimit, maxUnconfirmedTransactions uint64) (etx models.EthTx, err error) {
-	err := utils.CheckEthTxQueueCapacity(db, fromAddress, maxUnconfirmedTransactions)
+	err = utils.CheckEthTxQueueCapacity(db, fromAddress, maxUnconfirmedTransactions)
 	if err != nil {
-		return errors.Wrap(err, "transmitter#CreateEthTransaction")
+		return etx, errors.Wrap(err, "transmitter#CreateEthTransaction")
 	}
 
 	value := 0
@@ -282,7 +289,7 @@ RETURNNG eth_txes.*
 `, fromAddress, toAddress, payload, value, gasLimit).Scan(&etx)
 	err = res.Error
 	if err != nil {
-		return errors.Wrap(err, "transmitter failed to insert eth_tx")
+		return etx, errors.Wrap(err, "transmitter failed to insert eth_tx")
 	}
 
 	if res.RowsAffected == 0 {

@@ -295,10 +295,14 @@ func (cli *Client) RebroadcastTransactions(c *clipkg.Context) (err error) {
 	if err != nil {
 		return cli.errorOut(err)
 	}
+	keys, err := store.SendKeys()
+	if err != nil {
+		return cli.errorOut(err)
+	}
 
 	logger.Infof("Rebroadcasting transactions from %v to %v", beginningNonce, endingNonce)
 
-	ec := bulletprooftxmanager.NewEthConfirmer(store, cli.Config)
+	ec := bulletprooftxmanager.NewEthConfirmer(store.DB, store.EthClient, cli.Config, store.KeyStore, store.AdvisoryLocker, keys)
 	err = ec.ForceRebroadcast(beginningNonce, endingNonce, gasPriceWei, address, overrideGasLimit)
 	return cli.errorOut(err)
 }

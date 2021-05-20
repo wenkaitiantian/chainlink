@@ -190,7 +190,7 @@ func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker pos
 	}
 	headTrackerLogger, err := globalLogger.InitServiceLevelLogger(logger.HeadTracker, serviceLogLevels[logger.HeadTracker])
 	if err != nil {
-		logger.Fatal("error starting logger for head tracker")
+		logger.Fatal("error starting logger for head tracker", err)
 	}
 
 	var runExecutor services.RunExecutor
@@ -212,8 +212,13 @@ func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker pos
 	logBroadcaster := log.NewBroadcaster(log.NewORM(store.DB), ethClient, store.Config)
 	eventBroadcaster := postgres.NewEventBroadcaster(config.DatabaseURL(), config.DatabaseListenerMinReconnectInterval(), config.DatabaseListenerMaxReconnectDuration())
 	fluxMonitor := fluxmonitor.New(store, runManager, logBroadcaster)
-	ethBroadcaster := bulletprooftxmanager.NewEthBroadcaster(store, config, eventBroadcaster)
-	ethConfirmer := bulletprooftxmanager.NewEthConfirmer(store, config)
+
+	keys, err := store.SendKeys()
+	if err != nil {
+		logger.Fatal("error loading send keys", err)
+	}
+	ethBroadcaster := bulletprooftxmanager.NewEthBroadcaster(store.DB, ethClient, store.Config, store.KeyStore, advisoryLocker, eventBroadcaster, keys)
+	ethConfirmer := bulletprooftxmanager.NewEthConfirmer(store.DB, ethClient, store.Config, store.KeyStore, advisoryLocker, keys)
 	headBroadcaster := services.NewHeadBroadcaster()
 
 	subservices = append(subservices, promReporter)

@@ -14,7 +14,6 @@ import (
 	"github.com/smartcontractkit/chainlink/core/null"
 	"github.com/smartcontractkit/chainlink/core/services/eth"
 	"github.com/smartcontractkit/chainlink/core/services/postgres"
-	"github.com/smartcontractkit/chainlink/core/store"
 	"github.com/smartcontractkit/chainlink/core/store/models"
 	"github.com/smartcontractkit/chainlink/core/utils"
 
@@ -47,9 +46,15 @@ var (
 type ethConfirmer struct {
 	utils.StartStopOnce
 
-	store     *store.Store
-	ethClient eth.Client
-	config    Config
+	db             *gorm.DB
+	ethClient      eth.Client
+	config         Config
+	keystore       KeyStore
+	advisoryLocker postgres.AdvisoryLocker
+
+	// TODO: Get it from the KeyStore
+	sendKeys []models.Key
+
 	mb        *utils.Mailbox
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -61,25 +66,28 @@ type ethConfirmer struct {
 }
 
 // NewEthConfirmer instantiates a new eth confirmer
-func NewEthConfirmer(store *store.Store, config Config) *ethConfirmer {
+func NewEthConfirmer(db *gorm.DB, ethClient eth.Client, config Config, keystore KeyStore, advisoryLocker postgres.AdvisoryLocker, sendKeys []models.Key) *ethConfirmer {
 	var ethResender *EthResender
 	var reaper *Reaper
 	if config.EthTxResendAfterThreshold() > 0 {
-		ethResender = NewEthResender(store.DB, store.EthClient, defaultResenderPollInterval, config)
+		ethResender = NewEthResender(db, ethClient, defaultResenderPollInterval, config)
 	} else {
 		logger.Info("EthConfimer: EthResender Disabled")
 	}
 	if config.EthTxReaperThreshold() > 0 {
-		reaper = NewReaper(store.DB, config)
+		reaper = NewReaper(db, config)
 	} else {
 		logger.Info("EthConfirmer: Reaper Disabled")
 	}
 	context, cancel := context.WithCancel(context.Background())
 	return &ethConfirmer{
 		utils.StartStopOnce{},
-		store,
-		store.EthClient,
+		db,
+		ethClient,
 		config,
+		keystore,
+		advisoryLocker,
+		sendKeys,
 		utils.NewMailbox(1),
 		context,
 		cancel,
@@ -191,7 +199,7 @@ func (ec *ethConfirmer) ProcessHead(ctx context.Context, head models.Head) error
 	ctx, cancel := context.WithTimeout(ctx, processHeadTimeout)
 	defer cancel()
 
-	return ec.store.AdvisoryLocker.WithAdvisoryLock(context.Background(), postgres.AdvisoryLockClassID_EthConfirmer, postgres.AdvisoryLockObjectID_EthConfirmer, func() error {
+	return ec.advisoryLocker.WithAdvisoryLock(context.Background(), postgres.AdvisoryLockClassID_EthConfirmer, postgres.AdvisoryLockObjectID_EthConfirmer, func() error {
 		return ec.processHead(ctx, head)
 	})
 }
@@ -214,11 +222,7 @@ func (ec *ethConfirmer) processHead(ctx context.Context, head models.Head) error
 	logger.Debugw("EthConfirmer: finished CheckForReceipts", "headNum", head.Number, "time", time.Since(mark), "id", "eth_confirmer")
 	mark = time.Now()
 
-	keys, err := ec.store.SendKeys()
-	if err != nil {
-		return errors.Wrap(err, "could not fetch keys")
-	}
-	if err := ec.RebroadcastWhereNecessary(ctx, keys, head.Number); err != nil {
+	if err := ec.RebroadcastWhereNecessary(ctx, ec.sendKeys, head.Number); err != nil {
 		return errors.Wrap(err, "RebroadcastWhereNecessary failed")
 	}
 
@@ -229,14 +233,14 @@ func (ec *ethConfirmer) processHead(ctx context.Context, head models.Head) error
 		logger.Debugw("EthConfirmer: finished EnsureConfirmedTransactionsInLongestChain", "headNum", head.Number, "time", time.Since(mark), "id", "eth_confirmer")
 	}()
 
-	return errors.Wrap(ec.EnsureConfirmedTransactionsInLongestChain(ctx, keys, head), "EnsureConfirmedTransactionsInLongestChain failed")
+	return errors.Wrap(ec.EnsureConfirmedTransactionsInLongestChain(ctx, ec.sendKeys, head), "EnsureConfirmedTransactionsInLongestChain failed")
 }
 
 // SetBroadcastBeforeBlockNum updates already broadcast attempts with the
 // current block number. This is safe no matter how old the head is because if
 // the attempt is already broadcast it _must_ have been before this head.
 func (ec *ethConfirmer) SetBroadcastBeforeBlockNum(blockNum int64) error {
-	return ec.store.DB.Exec(
+	return ec.db.Exec(
 		`UPDATE eth_tx_attempts SET broadcast_before_block_num = ? WHERE broadcast_before_block_num IS NULL AND state = 'broadcast'`,
 		blockNum,
 	).Error
@@ -351,7 +355,7 @@ func (ec *ethConfirmer) fetchAndSaveReceipts(ctx context.Context, attempts []mod
 }
 
 func (ec *ethConfirmer) findEthTxAttemptsRequiringReceiptFetch() (attempts []models.EthTxAttempt, err error) {
-	err = ec.store.DB.
+	err = ec.db.
 		Joins("EthTx"). // Joins("EthTx") is needed for the query to actually return data from eth_txes table as well.
 		Joins("JOIN eth_txes ON eth_txes.id = eth_tx_attempts.eth_tx_id AND eth_txes.state IN ('unconfirmed', 'confirmed_missing_receipt')").
 		Order("eth_txes.nonce ASC, eth_tx_attempts.gas_price DESC").
@@ -518,7 +522,7 @@ func (ec *ethConfirmer) saveFetchedReceipts(receipts []Receipt) (err error) {
 	ctx, cancel := postgres.DefaultQueryCtx()
 	defer cancel()
 
-	_, err = ec.store.MustSQLDB().ExecContext(ctx, stmt, valueArgs...)
+	err = ec.db.WithContext(ctx).Exec(stmt, valueArgs...).Error
 	return errors.Wrap(err, "saveFetchedReceipts failed to save receipts")
 }
 
@@ -543,15 +547,10 @@ func (ec *ethConfirmer) saveFetchedReceipts(receipts []Receipt) (err error) {
 // We will continue to try to fetch a receipt for these attempts until all
 // attempts are below the finality depth from current head.
 func (ec *ethConfirmer) markConfirmedMissingReceipt() (err error) {
-	d, err := ec.store.DB.DB()
-	if err != nil {
-		return err
-	}
-
 	ctx, cancel := postgres.DefaultQueryCtx()
 	defer cancel()
 
-	res, err := d.ExecContext(ctx, `
+	res := ec.db.WithContext(ctx).Exec(`
 UPDATE eth_txes
 SET state = 'confirmed_missing_receipt'
 WHERE state = 'unconfirmed'
@@ -560,15 +559,11 @@ AND nonce < (
 	WHERE state = 'confirmed'
 )
 	`)
-	if err != nil {
-		return err
+	if res.Error != nil {
+		return res.Error
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n > 0 {
-		logger.Infow(fmt.Sprintf("EthConfirmer: %d transactions missing receipt", n), "n", n)
+	if res.RowsAffected > 0 {
+		logger.Infow(fmt.Sprintf("EthConfirmer: %d transactions missing receipt", res.RowsAffected), "n", res.RowsAffected)
 	}
 	return
 }
@@ -588,7 +583,7 @@ func (ec *ethConfirmer) markOldTxesMissingReceiptAsErrored(blockNum int64) error
 	if cutoff <= 0 {
 		return nil
 	}
-	d, err := ec.store.DB.DB()
+	d, err := ec.db.DB()
 	if err != nil {
 		return err
 	}
@@ -665,7 +660,7 @@ func (ec *ethConfirmer) rebroadcastWhereNecessary(ctx context.Context, address g
 	threshold := int64(ec.config.EthGasBumpThreshold())
 	bumpDepth := int64(ec.config.EthGasBumpTxDepth())
 	maxInFlightTransactions := ec.config.EthMaxInFlightTransactions()
-	etxs, err := FindEthTxsRequiringRebroadcast(ec.store.DB, address, blockHeight, threshold, bumpDepth, maxInFlightTransactions)
+	etxs, err := FindEthTxsRequiringRebroadcast(ec.db, address, blockHeight, threshold, bumpDepth, maxInFlightTransactions)
 	if err != nil {
 		return errors.Wrap(err, "FindEthTxsRequiringRebroadcast failed")
 	}
@@ -703,7 +698,7 @@ func (ec *ethConfirmer) rebroadcastWhereNecessary(ctx context.Context, address g
 // re-org, so multiple attempts are allowed to be in in_progress state (but
 // only one per eth_tx).
 func (ec *ethConfirmer) handleAnyInProgressAttempts(ctx context.Context, address gethCommon.Address, blockHeight int64) error {
-	attempts, err := getInProgressEthTxAttempts(ec.store, address)
+	attempts, err := getInProgressEthTxAttempts(ec.db, address)
 	if err != nil {
 		return errors.Wrap(err, "getInProgressEthTxAttempts failed")
 	}
@@ -718,12 +713,12 @@ func (ec *ethConfirmer) handleAnyInProgressAttempts(ctx context.Context, address
 	return nil
 }
 
-func getInProgressEthTxAttempts(s *store.Store, address gethCommon.Address) ([]models.EthTxAttempt, error) {
+func getInProgressEthTxAttempts(db *gorm.DB, address gethCommon.Address) ([]models.EthTxAttempt, error) {
 	ctx, cancel := postgres.DefaultQueryCtx()
 	defer cancel()
 
 	var attempts []models.EthTxAttempt
-	err := s.DB.
+	err := db.
 		WithContext(ctx).
 		Preload("EthTx").
 		Joins("INNER JOIN eth_txes ON eth_txes.id = eth_tx_attempts.eth_tx_id AND eth_txes.state in ('confirmed', 'confirmed_missing_receipt', 'unconfirmed')").
@@ -849,14 +844,14 @@ func (ec *ethConfirmer) attemptForRebroadcast(ctx context.Context, etx models.Et
 			"This is a bug! Please report to https://github.com/smartcontractkit/chainlink/issues", etx.ID)
 		bumpedGasPrice = ec.config.EthGasPriceDefault()
 	}
-	return newAttempt(ctx, ec.store, etx, bumpedGasPrice)
+	return newAttempt(ctx, ec.ethClient, ec.keystore, ec.config, etx, bumpedGasPrice)
 }
 
 func (ec *ethConfirmer) saveInProgressAttempt(attempt *models.EthTxAttempt) error {
 	if attempt.State != models.EthTxAttemptInProgress {
 		return errors.New("saveInProgressAttempt failed: attempt state must be in_progress")
 	}
-	return errors.Wrap(ec.store.DB.Save(attempt).Error, "saveInProgressAttempt failed")
+	return errors.Wrap(ec.db.Save(attempt).Error, "saveInProgressAttempt failed")
 }
 
 func (ec *ethConfirmer) handleInProgressAttempt(ctx context.Context, etx models.EthTx, attempt models.EthTxAttempt, blockHeight int64) error {
@@ -880,12 +875,12 @@ func (ec *ethConfirmer) handleInProgressAttempt(ctx context.Context, etx models.
 			"Eth node returned: '%s'. "+
 			"Bumping to %v wei and retrying. "+
 			"ACTION REQUIRED: You should consider increasing ETH_GAS_PRICE_DEFAULT", attempt.GasPrice.String(), sendError.Error(), bumpedGasPrice)
-		replacementAttempt, err := newAttempt(ctx, ec.store, etx, bumpedGasPrice)
+		replacementAttempt, err := newAttempt(ctx, ec.ethClient, ec.keystore, ec.config, etx, bumpedGasPrice)
 		if err != nil {
 			return errors.Wrap(err, "newAttempt failed")
 		}
 
-		if err := saveReplacementInProgressAttempt(ec.store, attempt, &replacementAttempt); err != nil {
+		if err := saveReplacementInProgressAttempt(ec.db, attempt, &replacementAttempt); err != nil {
 			return errors.Wrap(err, "saveReplacementInProgressAttempt failed")
 		}
 		return ec.handleInProgressAttempt(ctx, etx, replacementAttempt, blockHeight)
@@ -916,7 +911,7 @@ func (ec *ethConfirmer) handleInProgressAttempt(ctx context.Context, etx models.
 			"blockHeight", blockHeight,
 			"id", "RPCTxFeeCapExceeded",
 		)
-		return deleteInProgressAttempt(ec.store.DB, attempt)
+		return deleteInProgressAttempt(ec.db, attempt)
 	}
 
 	if sendError.Fatal() {
@@ -934,7 +929,7 @@ func (ec *ethConfirmer) handleInProgressAttempt(ctx context.Context, etx models.
 			"blockHeight", blockHeight,
 		)
 		// This will loop continuously on every new head so it must be handled manually by the node operator!
-		return deleteInProgressAttempt(ec.store.DB, attempt)
+		return deleteInProgressAttempt(ec.db, attempt)
 	}
 
 	if sendError.IsNonceTooLowError() {
@@ -960,7 +955,7 @@ func (ec *ethConfirmer) handleInProgressAttempt(ctx context.Context, etx models.
 			"Eth node returned error: '%s'. "+
 			"Either you have set ETH_GAS_BUMP_PERCENT (currently %v%%) too low or an external wallet used this account. "+
 			"Please note that using your node's private keys outside of the chainlink node is NOT SUPPORTED and can lead to missed transactions.",
-			attempt.GasPrice.ToInt().Int64(), etx.ID, sendError.Error(), ec.store.Config.EthGasBumpPercent()), "err", sendError)
+			attempt.GasPrice.ToInt().Int64(), etx.ID, sendError.Error(), ec.config.EthGasBumpPercent()), "err", sendError)
 
 		// Assume success and hand off to the next cycle.
 		sendError = nil
@@ -972,12 +967,12 @@ func (ec *ethConfirmer) handleInProgressAttempt(ctx context.Context, etx models.
 			"ACTION REQUIRED: Chainlink wallet with address 0x%x is OUT OF FUNDS",
 			attempt.ID, attempt.Hash, attempt.GasPrice.String(), sendError.Error(), etx.FromAddress,
 		), "err", sendError)
-		return saveInsufficientEthAttempt(ec.store.DB, &attempt, now)
+		return saveInsufficientEthAttempt(ec.db, &attempt, now)
 	}
 
 	if sendError == nil {
 		logger.Debugw("EthConfirmer: successfully broadcast transaction", "ethTxID", etx.ID, "ethTxAttemptID", attempt.ID, "txHash", attempt.Hash.Hex())
-		return saveSentAttempt(ec.store.DB, &attempt, now)
+		return saveSentAttempt(ec.db, &attempt, now)
 	}
 
 	// Any other type of error is considered temporary or resolvable by the
@@ -1041,7 +1036,7 @@ func saveInsufficientEthAttempt(db *gorm.DB, attempt *models.EthTxAttempt, broad
 // If any of the confirmed transactions does not have a receipt in the chain, it has been
 // re-org'd out and will be rebroadcast.
 func (ec *ethConfirmer) EnsureConfirmedTransactionsInLongestChain(ctx context.Context, keys []models.Key, head models.Head) error {
-	etxs, err := findTransactionsConfirmedAtOrAboveBlockHeight(ec.store.DB, head.EarliestInChain().Number)
+	etxs, err := findTransactionsConfirmedAtOrAboveBlockHeight(ec.db, head.EarliestInChain().Number)
 	if err != nil {
 		return errors.Wrap(err, "findTransactionsConfirmedAtOrAboveBlockHeight failed")
 	}
@@ -1136,7 +1131,7 @@ func (ec *ethConfirmer) markForRebroadcast(etx models.EthTx, head models.Head) e
 		"id", "eth_confirmer")
 
 	// Put it back in progress and delete all receipts (they do not apply to the new chain)
-	err := ec.store.Transaction(func(tx *gorm.DB) error {
+	err := postgres.GormTransactionWithDefaultContext(ec.db, func(tx *gorm.DB) error {
 		if err := deleteAllReceipts(tx, etx.ID); err != nil {
 			return errors.Wrapf(err, "deleteAllReceipts failed for etx %v", etx.ID)
 		}
@@ -1182,7 +1177,7 @@ func (ec *ethConfirmer) ForceRebroadcast(beginningNonce uint, endingNonce uint, 
 	logger.Infof("ForceRebroadcast: will rebroadcast transactions for all nonces between %v and %v", beginningNonce, endingNonce)
 
 	for n := beginningNonce; n <= endingNonce; n++ {
-		etx, err := findEthTxWithNonce(ec.store.DB, address, n)
+		etx, err := findEthTxWithNonce(ec.db, address, n)
 		if err != nil {
 			return errors.Wrap(err, "ForceRebroadcast failed")
 		}
@@ -1199,7 +1194,7 @@ func (ec *ethConfirmer) ForceRebroadcast(beginningNonce uint, endingNonce uint, 
 			if overrideGasLimit != 0 {
 				etx.GasLimit = overrideGasLimit
 			}
-			attempt, err := newAttempt(context.TODO(), ec.store, *etx, big.NewInt(int64(gasPriceWei)))
+			attempt, err := newAttempt(context.TODO(), ec.ethClient, ec.keystore, ec.config, *etx, big.NewInt(int64(gasPriceWei)))
 			if err != nil {
 				logger.Errorw("ForceRebroadcast: failed to create new attempt", "ethTxID", etx.ID, "err", err)
 				continue
@@ -1219,11 +1214,11 @@ func (ec *ethConfirmer) sendEmptyTransaction(ctx context.Context, fromAddress ge
 	if gasLimit == 0 {
 		gasLimit = ec.config.EthGasLimitDefault()
 	}
-	account, err := ec.store.KeyStore.GetAccountByAddress(fromAddress)
+	account, err := ec.keystore.GetAccountByAddress(fromAddress)
 	if err != nil {
 		return gethCommon.Hash{}, errors.Wrap(err, "(ethConfirmer).sendEmptyTransaction failed")
 	}
-	tx, err := sendEmptyTransaction(ec.ethClient, ec.store.KeyStore, uint64(nonce), gasLimit, big.NewInt(int64(gasPriceWei)), account, ec.config.ChainID())
+	tx, err := sendEmptyTransaction(ec.ethClient, ec.keystore, uint64(nonce), gasLimit, big.NewInt(int64(gasPriceWei)), account, ec.config.ChainID())
 	if err != nil {
 		return gethCommon.Hash{}, errors.Wrap(err, "(ethConfirmer).sendEmptyTransaction failed")
 	}

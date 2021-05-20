@@ -3,17 +3,15 @@ package keeper
 import (
 	"context"
 
-	"github.com/smartcontractkit/chainlink/core/services/postgres"
+	"github.com/smartcontractkit/chainlink/core/services/bulletprooftxmanager"
 	"github.com/smartcontractkit/chainlink/core/store/models"
 
-	"github.com/pkg/errors"
-	"github.com/smartcontractkit/chainlink/core/utils"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 const (
-	gasBuffer = int32(200_000)
+	gasBuffer = uint64(200_000)
 )
 
 func NewORM(db *gorm.DB) ORM {
@@ -136,8 +134,7 @@ func (korm ORM) SetLastRunHeightForUpkeepOnJob(db *gorm.DB, jobID int32, upkeepI
 }
 
 func (korm ORM) CreateEthTransactionForUpkeep(tx *gorm.DB, upkeep UpkeepRegistration, payload []byte, maxUnconfirmedTXs uint64) (models.EthTx, error) {
-	var etx models.EthTx
 	from := upkeep.Registry.FromAddress.Address()
 	to := upkeep.Registry.ContractAddress.Address()
-	return bulletprooftxmanager.CreateEthTransaction(tx, from, to, payload, upkeep.ExecuteGas+gasBuffer, maxUnconfirmedTransactions)
+	return bulletprooftxmanager.CreateEthTransaction(tx, from, to, payload, upkeep.ExecuteGas+gasBuffer, maxUnconfirmedTXs)
 }

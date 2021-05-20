@@ -40,6 +40,7 @@ type KeyStoreInterface interface {
 }
 
 // KeyStore manages a key storage directory on disk.
+// TODO: Move database-backing logic here
 type KeyStore struct {
 	*keystore.KeyStore
 	password     string
