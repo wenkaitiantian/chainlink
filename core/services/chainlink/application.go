@@ -11,9 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreos/pkg/health"
 	"github.com/smartcontractkit/chainlink/core/services/vrf"
 
 	"github.com/pkg/errors"
+	"github.com/smartcontractkit/chainlink/core/service"
 	"github.com/smartcontractkit/chainlink/core/services/cron"
 	"github.com/smartcontractkit/chainlink/core/services/fluxmonitorv2"
 	"github.com/smartcontractkit/chainlink/core/services/gasupdater"
@@ -53,11 +55,6 @@ type (
 	// headTrackableCallback is a simple wrapper around an On Connect callback
 	headTrackableCallback struct {
 		onConnect func()
-	}
-
-	StartCloser interface {
-		Start() error
-		Close() error
 	}
 
 	// ExternalInitiatorManager manages HTTP requests to remote external initiators
@@ -132,7 +129,8 @@ type ChainlinkApplication struct {
 	shutdownSignal           gracefulpanic.Signal
 	balanceMonitor           services.BalanceMonitor
 	explorerClient           synchronization.ExplorerClient
-	subservices              []StartCloser
+	subservices              []service.Service
+	HealthChecker            health.Checker
 	logger                   *logger.Logger
 
 	started     bool
@@ -144,7 +142,7 @@ type ChainlinkApplication struct {
 // the logger at the same directory and returns the Application to
 // be used by the node.
 func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker postgres.AdvisoryLocker, keyStoreGenerator strpkg.KeyStoreGenerator, externalInitiatorManager ExternalInitiatorManager, onConnectCallbacks ...func(Application)) (Application, error) {
-	var subservices []StartCloser
+	var subservices []service.Service
 	var headTrackables []strpkg.HeadTrackable
 
 	shutdownSignal := gracefulpanic.NewSignal()
@@ -335,6 +333,10 @@ func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker pos
 		// NOTE: Can keep things clean by putting more things in subservices
 		// instead of manually start/closing
 		subservices: subservices,
+	}
+
+	for _, service := range app.subservices {
+		healthChecker.Register(reflect.TypeOf(service).Name(), service)
 	}
 
 	headTrackables = append(

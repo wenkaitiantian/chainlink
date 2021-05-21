@@ -10,6 +10,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/smartcontractkit/chainlink/core/logger"
+	"github.com/smartcontractkit/chainlink/core/service"
 	"github.com/smartcontractkit/chainlink/core/services/eth"
 	"github.com/smartcontractkit/chainlink/core/store"
 	"github.com/smartcontractkit/chainlink/core/store/models"
@@ -52,9 +53,8 @@ type (
 	// GasUpdater listens for new heads and updates the base gas price dynamically
 	// based on the configured percentile of gas prices in that block
 	GasUpdater interface {
+		service.Service
 		store.HeadTrackable
-		Start() error
-		Close() error
 	}
 
 	// Config defines the interface for the supplied config
