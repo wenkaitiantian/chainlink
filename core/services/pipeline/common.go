@@ -232,6 +232,7 @@ const (
 	TaskTypeJSONParse TaskType = "jsonparse"
 	TaskTypeAny       TaskType = "any"
 	TaskTypeVRF       TaskType = "vrf"
+	TaskTypeAverage   TaskType = "average"
 
 	// Testing only.
 	TaskTypePanic TaskType = "panic"
