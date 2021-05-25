@@ -97,7 +97,7 @@ type (
 		MinIncomingConfirmations         uint32
 		MinRequiredOutgoingConfirmations uint64
 		OptimismGasFees                  bool
-		MinimumContractPayment           assets.Link
+		MinimumContractPayment           *assets.Link
 	}
 )
 
@@ -219,7 +219,7 @@ func init() {
 		EthMaxGasPriceWei:                *big.NewInt(100000000000),
 		MinIncomingConfirmations:         3,
 		MinRequiredOutgoingConfirmations: 2,
-		MinimumContractPayment:           *assets.NewLink(3500000000000000),
+		MinimumContractPayment:           assets.NewLink(3500000000000000),
 	}
 	fantomMainnet := fantomTestnet
 
@@ -716,7 +716,10 @@ func (c Config) EthNonceAutoSync() bool {
 
 // EthGasLimitDefault sets the default gas limit for outgoing transactions.
 func (c Config) EthGasLimitDefault() uint64 {
-	return c.getWithFallback("EthGasLimitDefault", parseUint64).(uint64)
+	if c.viper.IsSet(EnvVarName("EthGasLimitDefault")) {
+		return c.getWithFallback("EthGasLimitDefault", parseUint64).(uint64)
+	}
+	return chainSpecificConfig(c).EthGasLimitDefault
 }
 
 // EthGasPriceDefault is the starting gas price for every transaction
@@ -1286,7 +1289,10 @@ func (c Config) MinRequiredOutgoingConfirmations() uint64 {
 // MinimumContractPayment represents the minimum amount of LINK that must be
 // supplied for a contract to be considered.
 func (c Config) MinimumContractPayment() *assets.Link {
-	return c.getWithFallback("MinimumContractPayment", parseLink).(*assets.Link)
+	if c.viper.IsSet(EnvVarName("MinimumContractPayment")) {
+		return c.getWithFallback("MinimumContractPayment", parseLink).(*assets.Link)
+	}
+	return chainSpecificConfig(c).MinimumContractPayment
 }
 
 // MinimumRequestExpiration is the minimum allowed request expiration for a Service Agreement.
