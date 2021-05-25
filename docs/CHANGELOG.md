@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Chainlink no longers writes/reads eth key files to disk
+- Add sensible default configuration settings for Fantom
 
 ## [0.10.7] - 2021-05-24
 
