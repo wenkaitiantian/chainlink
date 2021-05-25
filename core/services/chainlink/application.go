@@ -339,7 +339,7 @@ func NewApplication(config *orm.Config, ethClient eth.Client, advisoryLocker pos
 	}
 
 	for _, service := range app.subservices {
-		if err := app.HealthChecker.Register(reflect.TypeOf(service).String(), service); err != nil {
+		if err = app.HealthChecker.Register(reflect.TypeOf(service).String(), service); err != nil {
 			return nil, err
 		}
 	}

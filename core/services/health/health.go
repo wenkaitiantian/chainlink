@@ -108,11 +108,11 @@ func (c *checker) Close() error {
 func (c *checker) run() {
 	defer close(c.done)
 
-	ticker := time.Tick(interval)
+	ticker := time.NewTicker(interval)
 
 	for {
 		select {
-		case <-ticker:
+		case <-ticker.C:
 			c.update()
 		case <-c.stop:
 			return
