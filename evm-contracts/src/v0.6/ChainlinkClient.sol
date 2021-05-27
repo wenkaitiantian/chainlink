@@ -133,10 +133,6 @@ contract ChainlinkClient {
    * @notice Sets the Chainlink token address for the public
    * network as given by the Pointer contract
    */
-  function setPublicChainlinkToken() internal {
-    setChainlinkToken();
-  }
-
   /**
    * @notice Retrieves the stored address of the LINK token
    * @return The address of the LINK token
