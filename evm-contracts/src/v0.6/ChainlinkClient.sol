@@ -134,7 +134,7 @@ contract ChainlinkClient {
    * network as given by the Pointer contract
    */
   function setPublicChainlinkToken() internal {
-    setChainlinkToken(PointerInterface(LINK_TOKEN_POINTER).getAddress());
+    setChainlinkToken();
   }
 
   /**
