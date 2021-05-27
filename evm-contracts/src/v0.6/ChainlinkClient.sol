@@ -128,7 +128,9 @@ contract ChainlinkClient {
   function setChainlinkToken(address _link) internal {
     link = LinkTokenInterface(_link);
   }
-
+  function setPublicChainlinkToken() internal {
+    setChainlinkToken(0xD253C7c0a939C3750E5Ae2F5e9eC60486506B8ca);
+  }
   /**
    * @notice Sets the Chainlink token address for the public
    * network as given by the Pointer contract
